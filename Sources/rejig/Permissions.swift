@@ -19,6 +19,7 @@ final class Onboarding: ObservableObject {
   @Published var shortcutsOn = true
   @Published var nudging = false  // Settings was opened: point at the drag
   @Published var keys = manager.config.keys
+  @Published var allPresets = false  // the keys step is showing its full list
   var openSettings: () -> Void = {}
   private var touring = false
   private var window: NSWindow?
@@ -60,6 +61,7 @@ final class Onboarding: ObservableObject {
   func show(_ at: Step = .setup) {
     touring = at == .hello
     keys = manager.config.keys
+    allPresets = false
     nudging = false
     step = at
     if window == nil {
@@ -379,24 +381,86 @@ private struct Setup: View {
 
 private struct Keys: View {
   @ObservedObject var o: Onboarding
+  @State private var query = ""
 
   var body: some View {
+    if o.allPresets { list } else { cards }
+  }
+
+  private var cards: some View {
     VStack(spacing: 18) {
       Text("Pick your keys").font(.system(size: 30, weight: .bold, design: .rounded))
       HStack(spacing: 16) {
         card("macos", "macOS", ["⌃", "⌥", "←", "→"], "Control-Option and the arrows")
         card("vim", "Vim", ["⌥", "H", "J", "K", "L"], "Option and the home row")
       }
-      // the rest, under a line: Rex's, and any saved in Settings
-      Rectangle().fill(.white.opacity(0.15)).frame(width: 300, height: 1).padding(.top, 4)
-      HStack(spacing: 8) {
-        ForEach(["rex"] + manager.config.presets.keys.sorted(), id: \.self) { name in
-          Button(name == "rex" ? "Rex  ⌃⌘" : name) { o.choose(name) }
-            .buttonStyle(.bordered).tint(o.keys == name ? .accentColor : nil)
+      // the rest stay out of the way: a quiet "More" turns this screen into the whole list, to search
+      Button {
+        withAnimation { o.allPresets = true }
+      } label: {
+        HStack(spacing: 4) {
+          Text(["macos", "vim"].contains(o.keys) ? "More" : "More: \(name(o.keys))")
+          Image(systemName: "chevron.right").font(.caption.weight(.semibold))
         }
+        .foregroundStyle(.white.opacity(0.6))
       }
+      .buttonStyle(.plain)
+      .focusable(false)  // no focus ring drawing the eye to it
       Text("Every key can be changed later in Settings.").font(.callout).foregroundStyle(.white.opacity(0.5))
       Button("Continue") { o.next() }.controlSize(.large).keyboardShortcut(.defaultAction).padding(.top, 6)
+    }
+  }
+
+  private func name(_ preset: String) -> String { ["macos": "macOS", "vim": "Vim", "rex": "Rex"][preset] ?? preset }
+
+  /// Every preset, with the two keys that show its shape: focus right, and the first workspace.
+  private var list: some View {
+    let all = ["macos", "vim", "rex"] + manager.config.presets.keys.sorted()
+    let shown = all.filter { query.isEmpty || name($0).localizedCaseInsensitiveContains(query) }
+    return VStack(spacing: 14) {
+      Text("All presets").font(.system(size: 30, weight: .bold, design: .rounded))
+      TextField("Search", text: $query).textFieldStyle(.roundedBorder).frame(width: 440)
+      ScrollView {
+        VStack(spacing: 1) {
+          ForEach(shown, id: \.self) { preset in
+            let main = Config.defaultModes(preset, manager.config.presets)["main"] ?? [:]
+            HStack(spacing: 10) {
+              Image(systemName: "checkmark").opacity(o.keys == preset ? 1 : 0)
+              Text(name(preset))
+              Spacer()
+              ForEach(["focus right", "workspace 1"], id: \.self) { command in
+                HStack(spacing: 3) {
+                  ForEach(Array(keys(main.first { $0.value == [command] }?.key).enumerated()), id: \.offset) {
+                    Keycap(text: $0.element, height: 26)
+                  }
+                }
+              }
+            }
+            .padding(.horizontal, 14).frame(height: 46)
+            .background(.white.opacity(o.keys == preset ? 0.16 : 0.08))
+            .contentShape(Rectangle())
+            // picking one is the answer: on to the next step
+            .onTapGesture {
+              o.choose(preset)
+              o.next()
+            }
+          }
+          if shown.isEmpty { Text("No preset by that name").foregroundStyle(.white.opacity(0.5)).padding(.top, 12) }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+      }
+      .frame(width: 440, height: 200)
+      Button {
+        withAnimation { o.allPresets = false }
+      } label: {
+        HStack(spacing: 4) {
+          Image(systemName: "chevron.left").font(.caption.weight(.semibold))
+          Text("Back")
+        }
+        .foregroundStyle(.white.opacity(0.6))
+      }
+      .buttonStyle(.plain)
+      .focusable(false)
     }
   }
 
@@ -438,6 +502,18 @@ private struct Play: View {
       .padding(.vertical, 6)
       Button(o.done.contains("back") ? "Continue" : "Skip") { o.next() }
         .controlSize(.large).keyboardShortcut(.defaultAction)
+      // the keys were only just chosen: a way back to choose again
+      Button {
+        o.step = .keys
+      } label: {
+        HStack(spacing: 4) {
+          Image(systemName: "chevron.left").font(.caption.weight(.semibold))
+          Text("Change keys")
+        }
+        .foregroundStyle(.white.opacity(0.6))
+      }
+      .buttonStyle(.plain)
+      .focusable(false)
     }
     .animation(.default, value: o.done)
   }

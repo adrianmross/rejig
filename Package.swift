@@ -6,7 +6,8 @@ let package = Package(
   platforms: [.macOS(.v13)],
   targets: [
     .target(name: "TileCore"),
-    .executableTarget(name: "rejig", dependencies: ["TileCore"]),
+    .target(name: "CVirtualDisplay"),
+    .executableTarget(name: "rejig", dependencies: ["TileCore", "CVirtualDisplay"]),
     .testTarget(name: "TileCoreTests", dependencies: ["TileCore"]),
   ]
 )

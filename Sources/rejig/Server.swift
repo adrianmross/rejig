@@ -54,7 +54,7 @@ enum Socket {
       exit(1)
     }
     send(fd, ["command": command, "caller": Int(getppid())])
-    if command == "subscribe" {
+    if command == "events" || command == "subscribe" {
       // one JSON object per line, for as long as this runs: {"event": "focus-changed", ...}
       var chunk = [UInt8](repeating: 0, count: 65536)
       while case let n = read(fd, &chunk, chunk.count), n > 0 { fwrite(chunk, 1, n, stdout); fflush(stdout) }
@@ -115,7 +115,7 @@ final class Server {
           close(fd)
           return
         }
-        if command == "subscribe" {
+        if command == "events" || command == "subscribe" {
           // never wait on a listener that has stopped reading
           _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
           self.subscribers.append(fd)
@@ -154,11 +154,12 @@ let commands: [(usage: String, does: String)] = [
   ("workspace-back-and-forth", "switch to the desktop you were on before"),
   ("move-node-to-workspace <n> [--stay]", "send the window to a desktop; --stay puts your desktop, focus and pointer back"),
   ("fetch [--workspace <n>]", "bring a window from a hidden desktop to this one"),
-  ("hold [--by <name>] [--workspace <n>] [--owner-pid <pid>]", "an agent takes the window: never tiled, resized or focused until released, or until that process exits"),
-  ("release", "give held windows back: one with a window flag, otherwise all"),
+  ("hold [--by <name>] [--agent-screen | --workspace <n>] [--owner-pid <pid>]", "an agent takes the window: never tiled, resized or focused until released, or until that process exits; --agent-screen also moves it to the display with no monitor"),
+  ("agent-screen [show|off]", "make the agent screen and print where it is as JSON; show opens a live view of it; off removes it"),
+  ("release", "give held windows back, to where they were: one with a window flag, otherwise all"),
   ("list-windows", "JSON: id, pid, app, title, workspace, display, frame, state, heldBy, visible, focused"),
   ("list-workspaces", "JSON: number, display, visible, focused"),
-  ("subscribe", "events as JSON lines until interrupted: window-opened, window-closed, focus-changed, workspace-changed, held-changed"),
+  ("events", "events as JSON lines until interrupted: window-opened, window-closed, focus-changed, workspace-changed, held-changed, screen-locked, screen-unlocked"),
   ("tiling toggle", "tiling on or off for this workspace"),
   ("reload-config", "read the config file again"),
   ("settings [tab] | welcome [step] | onboarding | practice", "open Settings, the tutorial, the setup step, or a practice window"),
@@ -198,6 +199,10 @@ let skill = """
     and is released when that process exits. `rejig release --window-id ID`
     when you are done. The user sees held windows in the menu and can take
     them back; `held-changed` tells you.
+  - Work on the agent screen when you can: `rejig hold --window-id ID
+    --agent-screen` moves the window to a display with no monitor. Nothing
+    slides and the user is not interrupted; `release` puts it back where it was.
+    The user can watch it with "Show Agent Screen" in the menu.
   - Changing desktop is visible: the screen slides. `move-node-to-workspace N
     --stay` and `fetch` each slide twice and hold the title bar for half a
     second. Batch such work and ask before a long run of it.
@@ -211,7 +216,12 @@ let skill = """
 
       rejig list-windows | jq '.[] | select(.app == "Safari") | {id, title, workspace}'
 
-  Park a window on desktop 4 without moving the user, work on it, bring it back:
+  Park a window out of the user's way, work on it, bring it back:
+
+      rejig hold --window-id "$id" --by me --owner-pid $$ --agent-screen
+      rejig release --window-id "$id"
+
+  The same on a real desktop the user can switch to (this one slides):
 
       rejig hold --window-id "$id" --by me --owner-pid $$ --workspace 4
       rejig fetch --window-id "$id"
@@ -223,7 +233,7 @@ let skill = """
 
   Wait for something instead of sleeping:
 
-      rejig subscribe | jq -c 'select(.event == "window-opened")'
+      rejig events | jq -c 'select(.event == "window-opened")'
 
   The window showing a Rex session:
 

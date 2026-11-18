@@ -76,6 +76,8 @@ private func axCallback(_: AXObserver, _ el: AXUIElement, _ name: CFString, _: U
 /// a hotkey, an Accessibility notification, or a workspace notification.
 final class Manager {
   let spaces = Spaces()
+  let agentScreen = AgentScreen()
+  private var parked: [Int: CGRect] = [:]  // windows on the agent screen, and the frame each left behind
   var mode = "main"
   var paused = false {
     didSet {
@@ -148,8 +150,12 @@ final class Manager {
   private(set) var lastScreen: NSScreen?  // the display with keyboard focus
   private var stats = (count: 0, lastMs: 0.0, maxMs: 0.0)
   private var appMs: [String: Double] = [:]  // time spent asking each app, last reconcile
-  private var silent = Set<pid_t>()  // timed out; not asked again until they show signs of life
-  private var retried = Set<pid_t>()  // silent apps already given their second chance
+  // too slow to answer on the main thread: asked in the background instead, and not laid out meanwhile
+  private var silent = Set<pid_t>()
+  private var probing = Set<pid_t>()  // being asked in the background right now
+  // While the screen is locked Accessibility says a window exists but not where it is, so
+  // nothing can be laid out, found by number or moved: we wait, and say so when asked.
+  private var locked = (CGSessionCopyCurrentDictionary() as? [String: Any])?["CGSSessionScreenIsLocked"] as? Bool == true
 
   func start() {
     guard !started else { return }
@@ -167,8 +173,20 @@ final class Manager {
     NotificationCenter.default.addObserver(
       forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
     ) { [unowned self] _ in
+      self.spaces.hiddenDisplay = self.agentScreen.uuid  // and the desktop numbers are worked out again
       self.everything = true
       self.schedule()
+      self.onChange()
+    }
+    for (name, state) in [("com.apple.screenIsLocked", true), ("com.apple.screenIsUnlocked", false)] {
+      DistributedNotificationCenter.default().addObserver(forName: Notification.Name(name), object: nil, queue: .main) {
+        [unowned self] _ in
+        self.locked = state
+        self.silent = []
+        self.everything = true
+        self.schedule()
+        self.onEvent(state ? "screen-locked" : "screen-unlocked", [:])
+      }
     }
     // a manual drag or resize is left alone until the button comes up
     NSEvent.addGlobalMonitorForEvents(matching: .leftMouseUp) { [unowned self] _ in
@@ -249,7 +267,6 @@ final class Manager {
         CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(o), .defaultMode)
       }
       silent.remove(pid)
-      retried.remove(pid)
       cache[pid] = nil
       launched.remove(pid)
       born = born.filter { $0.pid != pid }
@@ -328,6 +345,7 @@ final class Manager {
     onEvent("window-closed", ["id": numbers[id].map { Int($0) as Any } ?? NSNull(), "pid": Int(w.pid), "app": names[id] ?? ""])
     numbers[id] = nil
     if ignored.removeValue(forKey: id) != nil { onChange() }
+    parked[id] = nil
     wins[id] = nil
     names[id] = nil
     userFloat.remove(id)
@@ -357,17 +375,85 @@ final class Manager {
     return w.standard
   }
 
+  /// Displays left entirely alone: the agent screen, and any the config names.
+  private func unmanaged(_ screen: NSScreen) -> Bool {
+    screen.localizedName == AgentScreen.name || config.unmanagedDisplays.contains(screen.localizedName)
+  }
+
+  /// Ends a hold: the window is ours to manage again, back where it was if it had been put on the agent screen.
+  private func free(_ id: Int) {
+    ignored[id] = nil
+    if let was = parked.removeValue(forKey: id) { wins[id]?.setFrame(was) }
+  }
+
+  private typealias Raw = (el: AXUIElement, frame: CGRect, fullscreen: Bool, resizable: Bool, standard: Bool)
+
+  /// An app's windows, straight from Accessibility. `patience` is how many seconds
+  /// it gets to answer when the usual quarter second was not enough.
+  private static func ask(_ pid: pid_t, patience: Float? = nil) -> (error: AXError, windows: [Raw], ms: Double) {
+    let asked = Date()
+    let app = AXUIElementCreateApplication(pid)
+    if let patience { AXUIElementSetMessagingTimeout(app, patience) }
+    var list: CFTypeRef?
+    var error = AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &list)
+    let windows: [Raw] = (list as? [AXUIElement] ?? []).compactMap { el in
+      if let patience { AXUIElementSetMessagingTimeout(el, patience) }
+      defer { if patience != nil { AXUIElementSetMessagingTimeout(el, 0) } }  // back to the usual for later use
+      let win = Win(el: el, pid: pid)
+      if win.get(kAXMinimizedAttribute) == true { return nil }
+      guard let f = win.frame else {
+        error = .cannotComplete  // listed its window but not where it is: as good as no answer
+        return nil
+      }
+      var resizable: DarwinBoolean = false
+      AXUIElementIsAttributeSettable(el, kAXSizeAttribute as CFString, &resizable)
+      return (
+        el, f, win.get("AXFullScreen") == true, resizable.boolValue,
+        win.get(kAXSubroleAttribute) == kAXStandardWindowSubrole
+      )
+    }
+    return (error, windows, Date().timeIntervalSince(asked) * 1000)
+  }
+
+  private func adopt(_ windows: [Raw], _ app: NSRunningApplication) -> [Seen] {
+    let pid = app.processIdentifier
+    // of our own windows only the practice ones count: not the welcome, the borders or the markers
+    return windows.filter { pid != getpid() || $0.resizable && $0.standard }.map {
+      (identify(Win(el: $0.el, pid: pid), app), $0.frame, $0.fullscreen, $0.resizable, $0.standard)
+    }
+  }
+
+  /// Asks a slow app off the main thread, with patience. Its windows become
+  /// known, to list and to hold; it rejoins the layout once it answers promptly.
+  private func probe(_ app: NSRunningApplication) {
+    let pid = app.processIdentifier
+    guard probing.insert(pid).inserted else { return }
+    DispatchQueue.global(qos: .userInitiated).async {
+      let answer = Manager.ask(pid, patience: 3)
+      DispatchQueue.main.async {
+        self.probing.remove(pid)
+        guard answer.error != .cannotComplete, !app.isTerminated else { return }
+        self.cache[pid] = self.adopt(answer.windows, app)
+        if answer.ms < 250 {
+          self.silent.remove(pid)
+          self.observe(app)
+        }
+        self.schedule()
+      }
+    }
+  }
+
   /// Brings the trees in line with the windows that exist right now, then lays out.
   /// The Accessibility API only lists windows on the visible Spaces, so trees for
   /// other Spaces are kept as they were until their Space is shown again.
   private func reconcile() {
-    guard started, !paused, AXIsProcessTrusted() else { return }
+    guard started, !paused, !locked, AXIsProcessTrusted() else { return }
     if dragged, NSEvent.pressedMouseButtons != 0 { return }  // mid-drag: the mouse coming up reconciles
     let t0 = Date()
     let (full, ask) = (everything, dirty)
     everything = false
     dirty = []
-    active = spaces.active().filter { !config.unmanagedDisplays.contains($0.0.localizedName) }.map { screen, key in
+    active = spaces.active().filter { !unmanaged($0.0) }.map { screen, key in
       let orientation: Orientation = screen.frame.width >= screen.frame.height ? .h : .v
       let tree = trees[key] ?? Tree(orientation: orientation)
       tree.defaultOrientation = orientation
@@ -384,55 +470,31 @@ final class Manager {
     }
     // the apps that need asking are asked all at once: the wait is the slowest of them, not their sum
     let stale = apps.filter { full || ask.contains($0.processIdentifier) || cache[$0.processIdentifier] == nil }
-    typealias Raw = (el: AXUIElement, frame: CGRect, fullscreen: Bool, resizable: Bool, standard: Bool)
     let pids = stale.map(\.processIdentifier)
     var answers = [(error: AXError, windows: [Raw], ms: Double)](repeating: (.success, [], 0), count: pids.count)
-    let query: (pid_t) -> (AXError, [Raw], Double) = { pid in
-      let asked = Date()
-      var list: CFTypeRef?
-      let error = AXUIElementCopyAttributeValue(AXUIElementCreateApplication(pid), kAXWindowsAttribute as CFString, &list)
-      let windows: [Raw] = (list as? [AXUIElement] ?? []).compactMap { el in
-        let win = Win(el: el, pid: pid)
-        guard let f = win.frame, win.get(kAXMinimizedAttribute) != true else { return nil }
-        var resizable: DarwinBoolean = false
-        AXUIElementIsAttributeSettable(el, kAXSizeAttribute as CFString, &resizable)
-        return (
-          el, f, win.get("AXFullScreen") == true, resizable.boolValue,
-          win.get(kAXSubroleAttribute) == kAXStandardWindowSubrole
-        )
-      }
-      return (error, windows, Date().timeIntervalSince(asked) * 1000)
-    }
     answers.withUnsafeMutableBufferPointer { out in
       DispatchQueue.concurrentPerform(iterations: pids.count) { i in
         // our own app answers on the main thread, which is waiting here: asked below instead
-        if pids[i] != getpid() { out[i] = query(pids[i]) }
+        if pids[i] != getpid() { out[i] = Manager.ask(pids[i]) }
       }
     }
-    if let i = pids.firstIndex(of: getpid()) { answers[i] = query(getpid()) }
+    if let i = pids.firstIndex(of: getpid()) { answers[i] = Manager.ask(getpid()) }
     for (app, answer) in zip(stale, answers) {
       let pid = app.processIdentifier
       appMs[app.localizedName ?? "?"] = answer.ms
-      // a napping app (Mail in the background) costs the full timeout on every pass otherwise
-      // and it is not observed either, which would cost a timeout per notification; activating it wakes it
+      // an app that can't answer in time (napping, still starting, or the Mac is busy) would cost the
+      // full timeout on every pass, and again per notification if observed: what we knew of it is
+      // kept, and it is asked again in the background
       if answer.error == .cannotComplete {
         silent.insert(pid)
-        // an app still starting up (Chrome switches Accessibility on at the first question) gets one more
-        // chance; after that it waits to be activated, like a napping one
-        if retried.insert(pid).inserted {
-          DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-            self.silent.remove(pid)
-            self.dirty.insert(pid)
-            self.schedule()
-          }
-        }
-      } else {
-        observe(app)
+        probe(app)
+        continue
       }
-      // of our own windows only the practice ones count: not the welcome, the borders or the markers
-      cache[pid] = answer.windows.filter { pid != getpid() || $0.resizable && $0.standard }.map {
-        (identify(Win(el: $0.el, pid: pid), app), $0.frame, $0.fullscreen, $0.resizable, $0.standard)
-      }
+      observe(app)
+      cache[pid] = adopt(answer.windows, app)
+    }
+    if full {
+      for app in NSWorkspace.shared.runningApplications where silent.contains(app.processIdentifier) { probe(app) }
     }
     for app in apps {
       let pid = app.processIdentifier
@@ -608,7 +670,7 @@ final class Manager {
     lastScreen = screen
     onChange()
     // lazily: only when the pointer isn't on that monitor already
-    if !first, !screen.frame.contains(NSEvent.mouseLocation), !config.unmanagedDisplays.contains(screen.localizedName) {
+    if !first, !screen.frame.contains(NSEvent.mouseLocation), !unmanaged(screen) {
       CGWarpMouseCursorPosition(CGPoint(x: screen.axFrame.midX, y: screen.axFrame.midY))
     }
   }
@@ -630,7 +692,9 @@ final class Manager {
   // (_AXUIElementGetWindow) is private; two windows of one app at exactly the
   // same frame can't be told apart.
   private func windowNumbers() -> [CGWindowID: Int] {
-    let frames = wins.filter { !silent.contains($0.value.pid) }.compactMapValues(\.frame)
+    // asked afresh, except of slow apps, whose windows count at the frame last heard
+    var frames = wins.filter { !silent.contains($0.value.pid) }.compactMapValues(\.frame)
+    for w in cache.values.joined() where frames[w.id] == nil { frames[w.id] = w.frame }
     var out: [CGWindowID: Int] = [:]
     var taken = Set<Int>()
     for w in CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] ?? []
@@ -727,6 +791,9 @@ final class Manager {
   /// true with any output. Flags: `--window-id <CGWindowID>` acts on that window
   /// instead of the focused one.
   func run(_ command: String, caller: pid_t = 0, reply: @escaping (Bool, String) -> Void = { _, _ in }) {
+    if locked, !["list-workspaces", "reload-config", "mode", "agent-screen"].contains(command.split(separator: " ").first.map(String.init)) {
+      return reply(false, "the screen is locked: windows can't be found or moved until it is unlocked")
+    }
     if intercept(command) { return reply(true, "") }
     onRun(command)
     var a = command.split(separator: " ").map(String.init)
@@ -745,9 +812,12 @@ final class Manager {
         let owner = (CGWindowListCopyWindowInfo([.optionIncludingWindow], number) as? [[String: Any]])?.first?[
           kCGWindowOwnerPID as String] as? pid_t
       {
-        silent.remove(owner)
-        dirty.insert(owner)
-        reconcile()
+        // ponytail: waits on the main thread, up to 3 s for a slow app; only for a window named on purpose
+        let answer = Manager.ask(owner, patience: 3)
+        if answer.error != .cannotComplete, let app = NSRunningApplication(processIdentifier: owner) {
+          cache[owner] = adopt(answer.windows, app)
+          schedule()
+        }
         id = windowNumbers()[number]
       }
       // `fetch` looks again once it is on the window's workspace
@@ -849,7 +919,8 @@ final class Manager {
       ignored[id] = flags["--by"] ?? flags["--rex-session"].map { "Rex session \($0)" } ?? process
       // the hold ends with whoever asked for it: a process, or a Rex session
       let letGo = { [unowned self] in
-        guard self.ignored.removeValue(forKey: id) != nil else { return }
+        guard self.ignored[id] != nil else { return }
+        self.free(id)
         self.everything = true
         self.schedule()
         self.onChange()
@@ -881,24 +952,83 @@ final class Manager {
       schedule()
       onChange()
       onEvent("held-changed", ["held": ignored.count])
-      if let n = flags["--workspace"].flatMap({ Int($0) }) {
+      if flags["--agent-screen"] != nil {
+        // onto the display with no monitor: no desktop slides, and release puts it back
+        guard agentScreen.create() else {
+          result = (false, "macOS would not make the agent screen")
+          break
+        }
+        guard let w = wins[id], let f = w.frame ?? cache[w.pid]?.first(where: { $0.id == id })?.frame else {
+          result = (false, "the window's app is not answering; try again")
+          break
+        }
+        result = nil
+        func park(_ tries: Int) {
+          guard let area = agentScreen.screen?.axFrame else {
+            // the screen list catches up a moment after the display is made
+            if tries > 0 { return DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { park(tries - 1) } }
+            return reply(false, "the agent screen did not appear")
+          }
+          if parked[id] == nil { parked[id] = f }
+          let size = CGSize(width: min(f.width, area.width - 80), height: min(f.height, area.height - 80))
+          let step = CGFloat(parked.count - 1) * 30
+          lastLayout = Date()
+          w.setFrame(CGRect(origin: CGPoint(x: area.minX + 40 + step, y: area.minY + 40 + step), size: size))
+          schedule()
+          onChange()
+          reply(true, "")
+        }
+        park(10)
+      } else if let n = flags["--workspace"].flatMap({ Int($0) }) {
         result = nil
         let back = bookmark()
         carry(id, to: n) { error in back { reply(error ?? $0 == nil, error ?? $0 ?? "") } }
       }
     case "release", "unignore":
-      if flags["--window-id"] != nil, let id { ignored[id] = nil } else { ignored = [:] }
+      if flags["--window-id"] != nil || flags["--rex-session"] != nil, let id { free(id) } else { ignored.keys.forEach(free) }
       everything = true
       schedule()
       onChange()
       onEvent("held-changed", ["held": ignored.count])
+    case "agent-screen":
+      // makes it if need be and says where it is; "show" opens the viewer; "off" brings everything back and removes it
+      switch a.last {
+      case "off":
+        parked.keys.forEach(free)
+        agentScreen.remove()
+        onChange()
+      case "show":
+        guard agentScreen.create() else {
+          result = (false, "macOS would not make the agent screen")
+          break
+        }
+        agentScreen.show()
+        onChange()
+      default:
+        guard agentScreen.create() else {
+          result = (false, "macOS would not make the agent screen")
+          break
+        }
+        result = nil
+        onChange()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+          guard let screen = self.agentScreen.screen else { return reply(false, "the agent screen did not appear") }
+          let f = screen.axFrame
+          reply(
+            true,
+            self.json([
+              "display": AgentScreen.name, "x": f.minX, "y": f.minY, "w": f.width, "h": f.height,
+              "workspace": self.spaces.shown[screen].map { $0 as Any } ?? NSNull(),
+            ]))
+        }
+      }
     case "list-windows":
       let numbers = Dictionary(windowNumbers().map { ($0.value, $0.key) }, uniquingKeysWith: { a, _ in a })
       let visible = Set(cache.values.joined().map(\.id))
       let known: [[String: Any]] =
-          wins.keys.sorted().map { id -> [String: Any] in
+          wins.keys.sorted().filter { numbers[$0] != nil || silent.contains(wins[$0]!.pid) == false }.map { id -> [String: Any] in
             let w = wins[id]!
-            let f = silent.contains(w.pid) ? nil : w.frame
+            let f = silent.contains(w.pid) ? cache[w.pid]?.first { $0.id == id }?.frame : w.frame
             let screen = f.flatMap { f in NSScreen.screens.first { $0.axFrame.contains(CGPoint(x: f.midX, y: f.midY)) } }
             let title: String? = silent.contains(w.pid) ? nil : w.get(kAXTitleAttribute)
             return [
@@ -972,6 +1102,66 @@ final class Manager {
         reply(false, "the window took \(Int(got.minX)),\(Int(got.minY)),\(Int(got.width)),\(Int(got.height)) instead")
       }
       attempt(4)
+    case "move-workspace-to-monitor":
+      // macOS has no public way to move a Space between displays, and Mission Control
+      // lifts a desktop for a synthetic drag but won't take the drop on another
+      // display (tried on 27.2): the tiled windows go instead
+      guard let here = currentTree(), let i = active.firstIndex(where: { $0.tree === here }), active.count > 1
+      else { break }
+      for w in here.windows {
+        here.remove(w)
+        active[(i + 1) % active.count].tree.insert(w)
+      }
+      relayout()
+    case "focus":
+      // floating windows count too; a tiled one wins where they overlap
+      if let dir, let from = id.flatMap({ seen[$0] }) {
+        if let to = nearest(from: from, dir, in: rects) ?? nearest(from: from, dir, in: seen) { activate(to) }
+      } else if let to = currentTree()?.focused ?? seen.keys.min() {
+        // nothing focused here (the front app's windows are on another desktop): take any window
+        activate(to)
+      }
+    case "snap":
+      // Rectangle's named places. A tiled window leaves the layout to take one.
+      guard let id, let w = wins[id], let f = w.frame,
+        let screen = NSScreen.screens.first(where: { $0.axFrame.contains(CGPoint(x: f.midX, y: f.midY)) })
+      else { break }
+      if a.last == "restore" {
+        if let was = before.removeValue(forKey: id) { glide(w, from: f, to: was) }
+        break
+      }
+      guard let r = place(a.last ?? "", in: usable(screen), inner: config.gaps.inner, size: f.size) else {
+        result = (false, "no such place: \(a.last ?? "")")
+        break
+      }
+      if before[id] == nil { before[id] = f }
+      if tree != nil {
+        userTile.remove(id)
+        userFloat.insert(id)
+        schedule()
+      }
+      glide(w, from: f, to: r)
+    case "move" where tree == nil:
+      // a floating window steps through halves and quarters, then on to the next display
+      guard let dir, let id, let w = wins[id], let f = w.frame,
+        let screen = NSScreen.screens.first(where: { $0.axFrame.contains(CGPoint(x: f.midX, y: f.midY)) })
+      else { break }
+      let others = Dictionary(uniqueKeysWithValues: NSScreen.screens.indices.map { ($0, NSScreen.screens[$0].axFrame) })
+      let next = nearest(from: screen.axFrame, dir, in: others).map { usable(NSScreen.screens[$0]) }
+      if before[id] == nil { before[id] = f }
+      glide(w, from: f, to: snap(f, in: usable(screen), dir, inner: config.gaps.inner, next: next))
+    case "fullscreen" where tree == nil:
+      // a floating window fills its display; again puts it back
+      guard let id, let w = wins[id], let f = w.frame,
+        let screen = NSScreen.screens.first(where: { $0.axFrame.contains(CGPoint(x: f.midX, y: f.midY)) })
+      else { break }
+      let full = usable(screen)
+      if abs(f.width - full.width) < 20, abs(f.height - full.height) < 20, let was = before[id] {
+        glide(w, from: f, to: was)
+      } else {
+        before[id] = f
+        glide(w, from: f, to: full)
+      }
     case "layout" where a.contains("floating"):
       guard let id else {
         result = (false, "no window")
@@ -1075,7 +1265,12 @@ final class Manager {
   }
 
   func note(_ problem: String) {
-    problems.append(problem)
+    if !problems.contains(problem) { problems.append(problem) }
+    onChange()
+  }
+
+  func resolve(_ about: String) {
+    problems.removeAll { $0.contains(about) }
     onChange()
   }
 
@@ -1084,9 +1279,10 @@ final class Manager {
   func diagnostics() -> String {
     var out = [
       "rejig on macOS \(ProcessInfo.processInfo.operatingSystemVersionString)",
-      "accessibility granted: \(AXIsProcessTrusted()), paused: \(paused), mode: \(mode)",
+      "accessibility granted: \(AXIsProcessTrusted()), paused: \(paused), mode: \(mode), screen locked: \(locked)",
       spaces.describe(),
       "reconciles: \(stats.count), last \(String(format: "%.1f", stats.lastMs)) ms, slowest \(String(format: "%.1f", stats.maxMs)) ms",
+      "apps too slow to answer: \(silent.compactMap { NSRunningApplication(processIdentifier: $0)?.localizedName }.sorted())",
       "windows known: \(wins.count), floated for refusing their tile: \(stubborn.compactMap { names[$0] }), apps observed: \(observers.count), Spaces with a tree: \(trees.count)",
     ]
     out.append(

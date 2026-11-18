@@ -49,6 +49,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       self.server.emit(line)
     }
     manager.intercept = { [unowned self] in self.onboarding.take($0) }
+    manager.agentScreen.onProblem = { manager.note($0) }
+    manager.agentScreen.onShown = { manager.resolve("agent screen") }
     onboarding.openSettings = { [unowned self] in self.settings.show("Keybindings") }
     refresh()
     onboarding.check()
@@ -61,6 +63,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // "welcome play" opens it at one step
         let steps: [String: Onboarding.Step] = ["setup": .setup, "keys": .keys, "play": .play, "done": .done, "deep": .deep]
         self.onboarding.show(words.count > 1 ? steps[words[1]] ?? .hello : .hello)
+        if words.last == "presets" {  // the keys step, with its full list open
+          self.onboarding.show(.keys)
+          self.onboarding.allPresets = true
+        }
       case "onboarding": self.onboarding.show()
       case "practice": self.onboarding.addPractice()  // a spare window to try things on
       case "settings": self.settings.show(words.count > 1 ? words[1] : "General")
@@ -83,7 +89,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   private func refresh() {
     // each display's workspace, left to right, the focused display starred: "3|2*|5"
     let spaces = manager.spaces
-    let screens = NSScreen.screens.sorted { $0.frame.minX < $1.frame.minX }
+    // the agent screen has no monitor to be at: it is not in the readout
+    let screens = NSScreen.screens.filter { $0.localizedName != AgentScreen.name }.sorted { $0.frame.minX < $1.frame.minX }
     let focused = manager.lastScreen ?? screens.first
     let c = manager.config
     let numbers =
@@ -138,6 +145,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       let who = Set(held).sorted().joined(separator: ", ")
       add("Release \(held.count) Window\(held.count == 1 ? "" : "s") Held by \(who)", #selector(releaseHeld))
     }
+    if manager.agentScreen.exists { add("Show Agent Screen", #selector(showAgentScreen)) }
     menu.addItem(.separator())
     add("Settings…", #selector(openSettings), key: "cmd-comma")
     add("Copy Diagnostics", #selector(copyDiagnostics))
@@ -149,6 +157,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   @objc private func floating() { manager.run("layout floating tiling") }
   @objc private func tiling() { manager.run("tiling toggle") }
   @objc private func pause() { manager.paused.toggle() }
+  @objc private func showAgentScreen() { manager.agentScreen.show() }
   @objc private func releaseHeld() { manager.run("release") }
   @objc private func openSettings() { settings.show() }
   func tour() { onboarding.show(.hello) }

@@ -54,6 +54,9 @@ final class Spaces {
   }()
   private var exact = false  // the last numbers came from the window server, not the preferences file
   private var numberOf: [Int: Int] = [:]  // the window server's Space id -> desktop number
+  private var macNumber: [Int: Int] = [:]  // our desktop number -> the N in macOS's "Switch to Desktop N"
+  /// The UUID of a display whose desktops are not numbered: the agent screen.
+  var hiddenDisplay: String? { didSet { spaceChanged() } }
 
   // HACK: private API, read-only. CGSCopySpacesForWindows is the only way to ask
   // which Space a window is on when that Space is not showing: Accessibility
@@ -90,16 +93,22 @@ final class Spaces {
     desktops = 0
     ranges = [:]
     numberOf = [:]
+    macNumber = [:]
+    var counted = 0
     let live = liveSpaces()
     exact = live != nil
     for monitor in live ?? (conf?["Management Data"] as? [String: Any])?["Monitors"] as? [[String: Any]] ?? [] {
       guard let spaces = monitor["Spaces"] as? [[String: Any]] else { continue }  // a display not connected
       let uuids = spaces.filter { $0["type"] as? Int == 0 }.compactMap { $0["uuid"] as? String }
+      let display = monitor["Display Identifier"] as? String
+      // macOS counts the agent screen's desktop among its "Desktop N"; our numbers leave it out
+      defer { counted += uuids.count }
+      if display != nil, display == hiddenDisplay { continue }
       for (i, space) in spaces.filter({ $0["type"] as? Int == 0 }).enumerated() {
         if let id = space["id64"] as? Int { numberOf[id] = desktops + i + 1 }
+        macNumber[desktops + i + 1] = counted + i + 1
       }
       defer { desktops += uuids.count }
-      let display = monitor["Display Identifier"] as? String
       let screen = display == "Main" ? NSScreen.screens.first : NSScreen.screens.first { $0.uuid == display }
       if let screen { ranges[screen] = desktops + 1..<desktops + 1 + uuids.count }
       if let screen, let now = (monitor["Current Space"] as? [String: Any])?["uuid"] as? String,
@@ -175,7 +184,7 @@ final class Spaces {
   /// The user's "Switch to Desktop N" shortcut, or nil while it is switched off.
   func shortcut(_ n: Int) -> (key: CGKeyCode, flags: CGEventFlags)? {
     let all = CFPreferencesCopyAppValue("AppleSymbolicHotKeys" as CFString, hotkeys) as? [String: Any]
-    guard let entry = all?["\(117 + n)"] as? [String: Any], (entry["enabled"] as? NSNumber)?.boolValue == true,
+    guard let entry = all?["\(117 + (macNumber[n] ?? n))"] as? [String: Any], (entry["enabled"] as? NSNumber)?.boolValue == true,
       let p = (entry["value"] as? [String: Any])?["parameters"] as? [Int], p.count == 3
     else { return nil }
     return (CGKeyCode(p[1]), CGEventFlags(rawValue: UInt64(p[2])))
@@ -183,11 +192,11 @@ final class Spaces {
 
   private let hotkeys = "com.apple.symbolichotkeys" as CFString
 
-  /// Turns on "Switch to Desktop 1" to "6", keeping whatever keys are assigned
+  /// Turns on "Switch to Desktop 1" to "9", keeping whatever keys are assigned
   /// (Control-number when none are), exactly as ticking them in System Settings does.
   func enableShortcuts() {
     var all = CFPreferencesCopyAppValue("AppleSymbolicHotKeys" as CFString, hotkeys) as? [String: Any] ?? [:]
-    for (i, digit) in [18, 19, 20, 21, 23, 22].enumerated() {
+    for (i, digit) in [18, 19, 20, 21, 23, 22, 26, 28, 25].enumerated() {
       var entry =
         all["\(118 + i)"] as? [String: Any]
         ?? ["value": ["type": "standard", "parameters": [65535, digit, Int(CGEventFlags.maskControl.rawValue)]]]
