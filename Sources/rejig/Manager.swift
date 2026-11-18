@@ -149,6 +149,7 @@ final class Manager {
   private var observers: [pid_t: AXObserver] = [:]
   private var pending = false
   private var dragged = false
+  private var putOff = false  // a reconcile was put off until the mouse button comes up
   private var lastLayout = Date.distantPast
   private(set) var lastScreen: NSScreen?  // the display with keyboard focus
   private var stats = (count: 0, lastMs: 0.0, maxMs: 0.0)
@@ -197,6 +198,14 @@ final class Manager {
         self.dragged = false
         self.adopt = true
         self.schedule()
+      }
+      if self.putOff {
+        self.putOff = false
+        // not at once: a window dropped on another desktop is still on its way there
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+          self.everything = true
+          self.schedule()
+        }
       }
       // a click where the marked window keeps its close and minimize buttons: take the mark off now,
       // ahead of the animation. If the window stays after all, the mark is back within a second.
@@ -287,6 +296,10 @@ final class Manager {
       if let pid = app?.processIdentifier, silent.remove(pid) == nil { return }
     case NSWorkspace.activeSpaceDidChangeNotification:
       spaces.spaceChanged()
+      // what was marked belongs to the desktop just left: gone now, redrawn for this one in a moment
+      rects = [:]
+      seen = [:]
+      drawBorders()
       onChange()
       onEvent(
         "workspace-changed",
@@ -459,7 +472,12 @@ final class Manager {
   /// other Spaces are kept as they were until their Space is shown again.
   private func reconcile() {
     guard started, !paused, !locked, AXIsProcessTrusted() else { return }
-    if dragged, NSEvent.pressedMouseButtons != 0 { return }  // mid-drag: the mouse coming up reconciles
+    // while a mouse button is held nothing is laid out: a window may be mid-drag, on the desktop or in
+    // Mission Control, and writing its frame then pulls it out of the user's hand. The button coming up reconciles.
+    if NSEvent.pressedMouseButtons != 0 {
+      putOff = true
+      return
+    }
     let t0 = Date()
     let (full, ask) = (everything, dirty)
     everything = false
@@ -618,7 +636,7 @@ final class Manager {
     // a floating window is marked too while it has focus: it is in front then, so its outline covers
     // nothing. Not mid-drag, when its frame is ahead of what we know; and only a real window, not a
     // preview or a panel, which come and go faster than we hear of it.
-    if let focused, rects[focused] == nil, !dragged, ignored[focused] == nil, let w = wins[focused],
+    if let focused, rects[focused] == nil, seen[focused] != nil, !dragged, ignored[focused] == nil, let w = wins[focused],
       let known = cache[w.pid]?.first(where: { $0.id == focused }), known.standard, !known.fullscreen,
       let f = w.frame, f.width > 100, f.height > 100
     {
