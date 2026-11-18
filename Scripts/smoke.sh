@@ -7,7 +7,8 @@ frame() { rejig list-windows | python3 -c "
 import json,sys
 w=[w for w in json.load(sys.stdin) if w['id']==$1]
 print(w[0]['state'], w[0]['frame']['x'], w[0]['frame']['y'], w[0]['frame']['w'], w[0]['frame']['h']) if w else print('gone')"; }
-rejig practice || exit 1
+rejig practice close  # one practice window only: two at the same frame can't be told apart
+rejig practice >/dev/null || exit 1
 sleep 1.5
 id=$(rejig list-windows | python3 -c "
 import json,sys
@@ -36,4 +37,5 @@ check state release
 check none focus right
 for q in list-windows list-workspaces api; do rejig $q >/dev/null 2>&1 && echo "ok    $q" || { echo "FAIL  $q"; fail=1; }; done
 rejig bogus >/dev/null 2>&1 && { echo "FAIL  an unknown command was accepted"; fail=1; } || echo "ok    unknown command refused"
+rejig practice close
 exit $fail

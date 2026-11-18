@@ -141,6 +141,8 @@ final class Manager {
   private var seen: [Int: CGRect] = [:]  // every window on the visible Spaces, tiled or not
   private var adopt = false  // a manual drag just ended: take its result into the layout
   private let borders = Borders()
+  private var lit: CGRect?  // the focused window's mark, as last drawn
+  private var leaving = Date.distantPast  // when a window was last seen starting to close or minimize
   private var trees: [Int: Tree] = [:]  // by Space marker
   private var active: [(screen: NSScreen, tree: Tree)] = []
   private var rects: [Int: CGRect] = [:]
@@ -196,6 +198,11 @@ final class Manager {
         self.adopt = true
         self.schedule()
       }
+      // a click where the marked window keeps its close and minimize buttons: take the mark off now,
+      // ahead of the animation. If the window stays after all, the mark is back within a second.
+      // ponytail: by position, not by asking which button it was; a click there on anything else blinks the mark
+      let at = CGPoint(x: NSEvent.mouseLocation.x, y: NSScreen.screens[0].frame.maxY - NSEvent.mouseLocation.y)
+      if let lit = self.lit, CGRect(x: lit.minX, y: lit.minY, width: 64, height: 34).contains(at) { self.unmark() }
     }
     // never run two window managers against the same windows
     if !NSRunningApplication.runningApplications(withBundleIdentifier: "bobko.aerospace").isEmpty { paused = true }
@@ -227,9 +234,11 @@ final class Manager {
     silent.remove(pid)
     dirty.insert(pid)
     switch name {
-    case kAXUIElementDestroyedNotification:
-      forget(Win(el: el, pid: pid))
-      schedule()
+    case kAXUIElementDestroyedNotification, kAXWindowMiniaturizedNotification:
+      // closed, or minimized from the keyboard: nothing of it should stay drawn while we catch up
+      if let id = ids[Win(el: el, pid: pid)] { rects[id] = nil }
+      if name == kAXUIElementDestroyedNotification { forget(Win(el: el, pid: pid)) }
+      unmark()
     case kAXWindowMovedNotification, kAXWindowResizedNotification:
       if NSEvent.pressedMouseButtons != 0 {
         dragged = true
@@ -594,8 +603,17 @@ final class Manager {
     }
   }
 
+  /// Drops the focused window's mark at once, then looks again when things have settled.
+  private func unmark() {
+    leaving = Date()
+    drawBorders()
+    schedule()
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.65) { self.schedule() }
+  }
+
   private func drawBorders() {
-    let focused = focusedID()
+    // a window on its way out (closing, minimizing) loses its mark at once, not when its animation ends
+    let focused = Date().timeIntervalSince(leaving) < 0.6 ? nil : focusedID()
     var marked = rects.map { ($0.value, $0.key == focused) }
     // a floating window is marked too while it has focus: it is in front then, so its outline covers
     // nothing. Not mid-drag, when its frame is ahead of what we know.
@@ -604,6 +622,7 @@ final class Manager {
     {
       marked.append((f, true))
     }
+    lit = marked.first { $0.1 }?.0
     borders.update(config.style == "plain" ? [] : marked, config.border, glow: config.style == "shadow")
   }
 
