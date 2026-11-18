@@ -8,11 +8,8 @@ import json,sys
 w=[w for w in json.load(sys.stdin) if w['id']==$1]
 print(w[0]['state'], w[0]['frame']['x'], w[0]['frame']['y'], w[0]['frame']['w'], w[0]['frame']['h']) if w else print('gone')"; }
 rejig practice close  # one practice window only: two at the same frame can't be told apart
-rejig practice >/dev/null || exit 1
+id=$(rejig practice) || exit 1
 sleep 1.5
-id=$(rejig list-windows | python3 -c "
-import json,sys
-print([w['id'] for w in json.load(sys.stdin) if w['title'].startswith('Practice')][-1])")
 check() { # check <what it should change: frame|state|none> <command...>
   local want=$1; shift
   local before after
