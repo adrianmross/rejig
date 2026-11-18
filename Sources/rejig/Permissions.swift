@@ -142,7 +142,8 @@ final class Onboarding: ObservableObject {
     w.setContentSize(NSSize(width: 460, height: guide ? 360 : 300))
     practice.append(w)
     manager.practising = true
-    w.makeKeyAndOrderFront(nil)
+    // one opened on another screen, for a script, must not take the keyboard from whoever is typing
+    if screen == nil { w.makeKeyAndOrderFront(nil) } else { w.orderFrontRegardless() }
     return w
   }
 

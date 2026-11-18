@@ -616,9 +616,11 @@ final class Manager {
     let focused = Date().timeIntervalSince(leaving) < 0.6 ? nil : focusedID()
     var marked = rects.map { ($0.value, $0.key == focused) }
     // a floating window is marked too while it has focus: it is in front then, so its outline covers
-    // nothing. Not mid-drag, when its frame is ahead of what we know.
+    // nothing. Not mid-drag, when its frame is ahead of what we know; and only a real window, not a
+    // preview or a panel, which come and go faster than we hear of it.
     if let focused, rects[focused] == nil, !dragged, ignored[focused] == nil, let w = wins[focused],
-      cache[w.pid]?.first(where: { $0.id == focused })?.fullscreen != true, let f = w.frame, f.width > 100, f.height > 100
+      let known = cache[w.pid]?.first(where: { $0.id == focused }), known.standard, !known.fullscreen,
+      let f = w.frame, f.width > 100, f.height > 100
     {
       marked.append((f, true))
     }
@@ -1049,6 +1051,7 @@ final class Manager {
         agentScreen.show()
         onChange()
       default:
+        let existed = agentScreen.exists
         guard agentScreen.create() else {
           result = (false, "macOS would not make the agent screen")
           break
@@ -1061,7 +1064,7 @@ final class Manager {
           reply(
             true,
             self.json([
-              "display": AgentScreen.name, "x": f.minX, "y": f.minY, "w": f.width, "h": f.height,
+              "display": AgentScreen.name, "x": f.minX, "y": f.minY, "w": f.width, "h": f.height, "new": !existed,
               "workspace": self.spaces.shown[screen].map { $0 as Any } ?? NSNull(),
             ]))
         }
