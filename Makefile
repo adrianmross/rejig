@@ -3,7 +3,7 @@ APP := build/Rejig.app
 # signatures change with every build and macOS asks again.
 SIGN_ID ?= $(shell security find-identity -v -p codesigning | awk -F'"' '/Developer ID Application/ {print $$2; exit}')
 
-.PHONY: app test install uninstall clean icon notarize
+.PHONY: app test smoke install uninstall clean icon notarize
 
 app:
 	swift build -c release
@@ -36,6 +36,10 @@ notarize: app
 
 test:
 	swift test
+
+# Against the installed, running app: every window command on a practice window.
+smoke:
+	Scripts/smoke.sh
 
 install: app
 	-pkill -x rejig && sleep 1

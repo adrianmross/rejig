@@ -20,9 +20,10 @@ goodbye. Replay it from Settings > General or with `rejig welcome`. `rejig
 practice` opens a spare floating window to try things on. The setup step ticks off two things:
 
 1. **Accessibility.** Open Settings from it, drag the icon into the list, switch
-   it on. This is the only permission; no Screen Recording, no Input Monitoring.
-2. **Desktop shortcuts.** "Turn On" ticks macOS's "Switch to Desktop 1" to "6"
-   (Control-1 to Control-6 unless you chose other keys), which is how workspaces
+   it on. This is the only permission Rejig needs; Screen Recording is asked for
+   only if you open the agent screen's live view.
+2. **Desktop shortcuts.** "Turn On" ticks macOS's "Switch to Desktop 1" to "9"
+   (Control-1 to Control-9 unless you chose other keys), which is how workspaces
    are switched. From a script: `rejig enable-desktop-shortcuts`. Add desktops
    in Mission Control if you want more workspaces; a shortcut does nothing until
    its desktop exists.
@@ -168,16 +169,34 @@ open and receives one event per line.
 - `--rex-session LABEL` in place of `--window-id` names the macOS window showing
   that Rex session (matched by its title). On `hold` it also ends the hold when
   the session ends.
-- `rejig subscribe` prints events as JSON lines until interrupted:
+- `rejig events` prints events as JSON lines until interrupted:
   `window-opened`, `window-closed`, `focus-changed` (each with id, pid, app,
-  title), `workspace-changed` (the desktop showing on each display) and
-  `held-changed`.
+  title), `workspace-changed` (the desktop showing on each display),
+  `held-changed`, `screen-locked` and `screen-unlocked`. While the screen is
+  locked macOS won't say where windows are, so window commands exit 1 saying so.
 - `list-windows` also lists windows Rejig has never met (state `unseen`), such
   as those on hidden desktops after a restart, with what the window server
   knows: id, pid, app, frame and workspace, but no title.
 - `rejig move --frame x,y,w,h --window-id ID` floats a window at an exact frame,
   in points from the main display's top-left; it fails if the window refuses it.
 - `"unmanagedDisplays": ["name"]` in the config keeps Rejig off a display.
+
+### The agent screen
+
+Moving a window to another desktop always plays the slide. The agent screen is
+the way round it: a 1920 x 1200 display with no monitor, made on demand, that
+touches the real displays only at a corner so the pointer can't stray onto it.
+
+- `rejig hold --window-id ID --agent-screen` moves a window there, instantly and
+  without interrupting anyone; `rejig release` puts it back where it was.
+- `rejig agent-screen` makes it and prints where it is; `rejig agent-screen off`
+  brings everything back and removes it. It also goes when Rejig quits.
+- "Show Agent Screen" in the menu (or `rejig agent-screen show`) opens a live
+  view of it in a window. This is the one thing that needs Screen Recording
+  permission; macOS asks the first time.
+- macOS gives the agent screen's desktop a number of its own. Rejig's numbers,
+  keys and menu-bar readout leave it out, so yours don't change; macOS's own
+  Control-number shortcuts and Mission Control do count it.
 
 ## What is public API and what is not
 
@@ -191,6 +210,8 @@ open and receives one event per line.
 | Move a window to Space N | holds the title bar with a synthetic mouse press, then posts the shortcut | UI automation |
 | Desktop numbers | `CGSCopyManagedDisplaySpaces`, marked `HACK` in `Spaces.swift`; read-only, found by name at run time. Without it: learned when switching by number, and read from the `com.apple.spaces` preferences at launch | **private API**, with a public fallback |
 | Which desktop a window is on, when it is not showing | `CGSCopySpacesForWindows`, marked `HACK` in `Spaces.swift`; read-only, found by name at run time. Without it: only for windows Rejig has watched | **private API**, with a public fallback |
+| The agent screen | `CGVirtualDisplay`, declared in `Sources/CVirtualDisplay`; only when an agent asks for it | **private API** |
+| Viewing the agent screen | ScreenCaptureKit, in a Rejig window | documented public API; needs Screen Recording permission |
 | Turning on the desktop shortcuts | writes `com.apple.symbolichotkeys`, then runs macOS's `activateSettings -u` so it applies without logging out | public call, undocumented keys and tool |
 | Move a Space to another display | not possible | private API only; Mission Control lifts a desktop for a synthetic drag but refuses the drop on another display |
 | Permission-granted event | `com.apple.accessibility.api` distributed notification | public API, undocumented name |
