@@ -10,7 +10,8 @@ import AppKit
 ///   its frame only, so the active colour is exact. The focused window is in
 ///   front, so this never covers another window's content.
 ///
-/// Floating windows get no border: theirs would sit under whatever they float above.
+/// A floating window is marked only while it has focus: any other time its
+/// border would sit under, or over, whatever it overlaps.
 final class Borders {
   private var overlays: [(window: NSWindow, view: BorderView, screen: Int)] = []
 
@@ -40,7 +41,8 @@ final class Borders {
     w.hasShadow = false
     w.ignoresMouseEvents = true
     w.level = NSWindow.Level(rawValue: NSWindow.Level.normal.rawValue + (above ? 1 : -1))
-    w.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+    // transient: on every Space, and put away with the windows when Mission Control shows them all
+    w.collectionBehavior = [.canJoinAllSpaces, .transient, .ignoresCycle]
     w.contentView = view
     w.orderFrontRegardless()
     return (w, view, screen)

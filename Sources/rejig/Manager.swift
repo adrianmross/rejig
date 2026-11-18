@@ -233,6 +233,7 @@ final class Manager {
     case kAXWindowMovedNotification, kAXWindowResizedNotification:
       if NSEvent.pressedMouseButtons != 0 {
         dragged = true
+        drawBorders()  // the mark comes off a window being dragged
       } else if Date().timeIntervalSince(lastLayout) > 0.5 {  // not the echo of our own write
         schedule()
       }
@@ -595,9 +596,15 @@ final class Manager {
 
   private func drawBorders() {
     let focused = focusedID()
-    borders.update(
-      config.style == "plain" ? [] : rects.map { ($0.value, $0.key == focused) }, config.border,
-      glow: config.style == "shadow")
+    var marked = rects.map { ($0.value, $0.key == focused) }
+    // a floating window is marked too while it has focus: it is in front then, so its outline covers
+    // nothing. Not mid-drag, when its frame is ahead of what we know.
+    if let focused, rects[focused] == nil, !dragged, ignored[focused] == nil, let w = wins[focused],
+      cache[w.pid]?.first(where: { $0.id == focused })?.fullscreen != true, let f = w.frame, f.width > 100, f.height > 100
+    {
+      marked.append((f, true))
+    }
+    borders.update(config.style == "plain" ? [] : marked, config.border, glow: config.style == "shadow")
   }
 
   private func relayout() {
@@ -1136,9 +1143,9 @@ final class Manager {
       }
       relayout()
     case "focus":
-      // floating windows count too; a tiled one wins where they overlap
+      // tiled and floating windows alike: whichever lies nearest that way
       if let dir, let from = id.flatMap({ seen[$0] }) {
-        if let to = nearest(from: from, dir, in: rects) ?? nearest(from: from, dir, in: seen) { activate(to) }
+        if let to = nearest(from: from, dir, in: seen) { activate(to) }
       } else if dir == nil, flags["--window-id"] != nil || flags["--rex-session"] != nil, let id {
         activate(id)  // a window named on purpose, and no direction: that window
       } else if let to = currentTree()?.focused ?? seen.keys.min() {
@@ -1237,12 +1244,16 @@ final class Manager {
 
   /// Moves a floating window to `to` over a few frames, the way macOS's own tiling does.
   private func glide(_ w: Win, from: CGRect, to: CGRect) {
-    guard config.animate else { return w.setFrame(to) }
+    guard config.animate else {
+      w.setFrame(to)
+      return drawBorders()
+    }
     let steps = 6
     for i in 1...steps {
       DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) / 60) {
         let t = 1 - pow(1 - CGFloat(i) / CGFloat(steps), 3)  // ease out
         self.lastLayout = Date()  // these are our writes, not the user's
+        if i == steps { DispatchQueue.main.async { self.drawBorders() } }  // the mark follows the window
         w.setFrame(
           i == steps
             ? to
