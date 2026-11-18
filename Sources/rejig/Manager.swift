@@ -77,6 +77,7 @@ private func axCallback(_: AXObserver, _ el: AXUIElement, _ name: CFString, _: U
 final class Manager {
   let spaces = Spaces()
   let agentScreen = AgentScreen()
+  private var agentTiling = false  // `agent-screen tile`: lay out the agent screen too, for demos and films
   private var parked: [Int: CGRect] = [:]  // windows on the agent screen, and the frame each left behind
   var mode = "main"
   var paused = false {
@@ -377,7 +378,7 @@ final class Manager {
 
   /// Displays left entirely alone: the agent screen, and any the config names.
   private func unmanaged(_ screen: NSScreen) -> Bool {
-    screen.localizedName == AgentScreen.name || config.unmanagedDisplays.contains(screen.localizedName)
+    screen.localizedName == AgentScreen.name ? !agentTiling : config.unmanagedDisplays.contains(screen.localizedName)
   }
 
   /// Ends a hold: the window is ours to manage again, back where it was if it had been put on the agent screen.
@@ -916,6 +917,12 @@ final class Manager {
       }
       var name = [CChar](repeating: 0, count: 256)
       let process = caller > 0 && proc_name(caller, &name, 256) > 0 ? String(cString: name) : "a script"
+      // while the agent screen is being tiled, for a demo or a film, a window already there stays in its layout
+      if flags["--agent-screen"] != nil, agentTiling, let f = wins[id]?.frame,
+        agentScreen.screen?.axFrame.contains(CGPoint(x: f.midX, y: f.midY)) == true
+      {
+        break
+      }
       ignored[id] = flags["--by"] ?? flags["--rex-session"].map { "Rex session \($0)" } ?? process
       // the hold ends with whoever asked for it: a process, or a Rex session
       let letGo = { [unowned self] in
@@ -995,7 +1002,18 @@ final class Manager {
       switch a.last {
       case "off":
         parked.keys.forEach(free)
+        agentTiling = false
         agentScreen.remove()
+        onChange()
+      case "tile":
+        // windows there are laid out like on any display: for showing Rejig at work where nobody is working
+        guard agentScreen.create() else {
+          result = (false, "macOS would not make the agent screen")
+          break
+        }
+        agentTiling = true
+        everything = true
+        schedule()
         onChange()
       case "show":
         guard agentScreen.create() else {
@@ -1022,6 +1040,10 @@ final class Manager {
             ]))
         }
       }
+    case "style":
+      // "highlight", "shadow" or "plain", until the config is next read: for trying one, or for a film
+      config.style = a.last ?? config.style
+      relayout()
     case "list-windows":
       let numbers = Dictionary(windowNumbers().map { ($0.value, $0.key) }, uniquingKeysWith: { a, _ in a })
       let visible = Set(cache.values.joined().map(\.id))
@@ -1117,6 +1139,8 @@ final class Manager {
       // floating windows count too; a tiled one wins where they overlap
       if let dir, let from = id.flatMap({ seen[$0] }) {
         if let to = nearest(from: from, dir, in: rects) ?? nearest(from: from, dir, in: seen) { activate(to) }
+      } else if dir == nil, flags["--window-id"] != nil || flags["--rex-session"] != nil, let id {
+        activate(id)  // a window named on purpose, and no direction: that window
       } else if let to = currentTree()?.focused ?? seen.keys.min() {
         // nothing focused here (the front app's windows are on another desktop): take any window
         activate(to)

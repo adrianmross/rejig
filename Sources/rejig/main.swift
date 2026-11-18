@@ -68,7 +68,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
           self.onboarding.allPresets = true
         }
       case "onboarding": self.onboarding.show()
-      case "practice": self.onboarding.addPractice()  // a spare window to try things on
+      case "practice":
+        // a spare window to try things on; prints its window number. "--agent-screen" opens it there,
+        // "--tile" puts it in the layout, "close" closes them all
+        if words.last == "close" {
+          self.onboarding.endPractice()
+          break
+        }
+        func open(_ tries: Int) {
+          let away = words.contains("--agent-screen")
+          if away, manager.agentScreen.create(), manager.agentScreen.screen == nil, tries > 0 {
+            return DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { open(tries - 1) }
+          }
+          guard let w = self.onboarding.addPractice(on: away ? manager.agentScreen.screen : nil) else {
+            return reply(false, "no more practice windows: six are open")
+          }
+          let number = w.windowNumber
+          let tile = {
+            guard words.contains("--tile") else { return reply(true, "\(number)") }
+            manager.run("layout floating tiling --window-id \(number)") { ok, out in reply(ok, ok ? "\(number)" : out) }
+          }
+          DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            // macOS opens an app's new window on the display in use, wherever it was asked for: moved after
+            guard away, let area = manager.agentScreen.screen?.axFrame else { return tile() }
+            // each a step further in, so no two share a frame, which is how windows are told apart
+            let step = (Int(w.title.split(separator: " ").last ?? "1") ?? 1) * 40
+            manager.run(
+              "move --frame \(Int(area.minX) + 40 + step),\(Int(area.minY) + 40 + step),460,300 --window-id \(number)"
+            ) { ok, out in
+              // the window server's own record of the frame trails the move by a moment
+              ok ? DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: tile) : reply(false, out)
+            }
+          }
+        }
+        return open(10)
       case "settings": self.settings.show(words.count > 1 ? words[1] : "General")
       default: return manager.run(command, caller: caller, reply: reply)
       }

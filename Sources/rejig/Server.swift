@@ -141,7 +141,7 @@ final class Server {
 
 /// Every command, once: `--help` and `rejig api` are both made from this.
 let commands: [(usage: String, does: String)] = [
-  ("focus left|down|up|right", "focus the window on that side"),
+  ("focus left|down|up|right", "focus the window on that side; with a window flag and no direction, that window"),
   ("move left|down|up|right", "move the window: a tile within the layout, a floating one through halves and displays"),
   ("move --frame x,y,w,h", "float the window at an exact frame, in points from the main display's top-left"),
   ("snap <place>|restore", "top-left, top-right, bottom-left, bottom-right, left-third, center-third, right-third, left-two-thirds, right-two-thirds, center, maximize"),
@@ -155,14 +155,16 @@ let commands: [(usage: String, does: String)] = [
   ("move-node-to-workspace <n> [--stay]", "send the window to a desktop; --stay puts your desktop, focus and pointer back"),
   ("fetch [--workspace <n>]", "bring a window from a hidden desktop to this one"),
   ("hold [--by <name>] [--agent-screen | --workspace <n>] [--owner-pid <pid>]", "an agent takes the window: never tiled, resized or focused until released, or until that process exits; --agent-screen also moves it to the display with no monitor"),
-  ("agent-screen [show|off]", "make the agent screen and print where it is as JSON; show opens a live view of it; off removes it"),
+  ("agent-screen [show|tile|off]", "make the agent screen and print where it is as JSON; show opens a live view of it; tile lays its windows out too; off removes it"),
+  ("practice [--agent-screen] [--tile] | practice close", "open a spare window and print its number; close them all"),
+  ("style highlight|shadow|plain", "how tiled windows are marked, until the config is next read"),
   ("release", "give held windows back, to where they were: one with a window flag, otherwise all"),
   ("list-windows", "JSON: id, pid, app, title, workspace, display, frame, state, heldBy, visible, focused"),
   ("list-workspaces", "JSON: number, display, visible, focused"),
   ("events", "events as JSON lines until interrupted: window-opened, window-closed, focus-changed, workspace-changed, held-changed, screen-locked, screen-unlocked"),
   ("tiling toggle", "tiling on or off for this workspace"),
   ("reload-config", "read the config file again"),
-  ("settings [tab] | welcome [step] | onboarding | practice", "open Settings, the tutorial, the setup step, or a practice window"),
+  ("settings [tab] | welcome [step] | onboarding", "open Settings, the tutorial, or the setup step"),
   ("api", "this list as JSON"),
   ("skill show|install", "the guide for agents, or put it where Claude Code finds it"),
 ]

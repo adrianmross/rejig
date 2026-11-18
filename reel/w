@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Drives Rejig's practice windows on the agent screen for the launch film.
+#   w start        the agent screen, tiled, with practice window 1
+#   w open N       practice window N, tiled
+#   w N COMMAND    a rejig command on practice window N, e.g. `w 2 move left`
+#   w end          close them and put everything back
+dir="${TMPDIR:-/tmp}/rejig-film"
+case "$1" in
+start)
+  rm -rf "$dir" && mkdir -p "$dir"
+  rejig practice close
+  rejig agent-screen tile && rejig style highlight
+  rejig practice --agent-screen --tile >"$dir/1"
+  ;;
+open) rejig practice --agent-screen --tile >"$dir/$2" ;;
+end)
+  rejig practice close
+  rejig agent-screen off
+  rejig reload-config
+  ;;
+*)
+  n="$1"
+  shift
+  rejig "$@" --window-id "$(cat "$dir/$n")"
+  ;;
+esac

@@ -122,9 +122,9 @@ final class Onboarding: ObservableObject {
   }
 
   /// A spare window to try things on: it floats over the layout until asked into it.
-  func addPractice() {
+  @discardableResult func addPractice(on screen: NSScreen? = nil) -> NSWindow? {
     practice.removeAll { !$0.isVisible }
-    guard practice.count < 6, let v = (window?.screen ?? NSScreen.main)?.visibleFrame else { return }
+    guard practice.count < 6, let v = (screen ?? window?.screen ?? NSScreen.main)?.visibleFrame else { return nil }
     let n = practice.count
     let guide = step == .deep && window != nil && n == 0  // the longer practice's first one says what to try on it
     let w = NSWindow(
@@ -143,9 +143,10 @@ final class Onboarding: ObservableObject {
     practice.append(w)
     manager.practising = true
     w.makeKeyAndOrderFront(nil)
+    return w
   }
 
-  private func endPractice() {
+  func endPractice() {
     manager.onSplit = nil
     guard manager.practising else { return }
     practice.forEach { $0.close() }

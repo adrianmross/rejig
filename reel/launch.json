@@ -1,0 +1,95 @@
+{
+  "fps": 30,
+  "dir": "clips",
+  "join": "launch",
+  "fade": 0.4,
+  "screen": {"app": "Rejig", "frame": "display", "display": "agents"},
+  "style": {"keys": "shortcuts"},
+  "sound": {
+    "packs": ["kbsim/alpaca", "sfx"],
+    "sounds": {"open": "sfx/sting-minimal-short"}
+  },
+  "scenes": [
+    {
+      "name": "title",
+      "card": {"kicker": "Rejig", "title": "Every window in its place", "subtitle": "A tiling window manager on real macOS desktops"},
+      "caption": "Rejig. Every window in its place."
+    },
+    {
+      "name": "tiling",
+      "screen": {"steps": [
+        {"pause": 0.8},
+        {"caption": "Open a window, and it takes its place."},
+        {"run": "./w open 2", "sound": "sfx/pop-medium-in"},
+        {"pause": 0.9},
+        {"run": "./w open 3", "sound": "sfx/pop-medium-in"},
+        {"pause": 1.2},
+        {"caption": "Move between them from the keyboard."},
+        {"run": "./w 1 focus right", "key": "Control+Alt+ArrowRight"},
+        {"pause": 0.8},
+        {"run": "./w 2 focus right", "key": "Control+Alt+ArrowRight"},
+        {"pause": 1},
+        {"caption": "And move the windows themselves."},
+        {"run": "./w 3 move left", "key": "Control+Alt+Shift+ArrowLeft", "sound": "sfx/swish-soft"},
+        {"pause": 0.8},
+        {"run": "./w 3 move left", "key": "Control+Alt+Shift+ArrowLeft", "sound": "sfx/swish-soft"},
+        {"pause": 1.4}
+      ]}
+    },
+    {
+      "name": "layouts",
+      "screen": {"steps": [
+        {"pause": 0.6},
+        {"caption": "Give one window more room."},
+        {"run": "./w 3 resize smart +120", "key": "Alt+Equal"},
+        {"pause": 0.7},
+        {"run": "./w 3 resize smart +120", "key": "Alt+Equal"},
+        {"pause": 1},
+        {"caption": "Or all of it."},
+        {"run": "./w 3 fullscreen", "key": "Control+Alt+Shift+F", "sound": "sfx/swish-soft"},
+        {"pause": 1.2},
+        {"run": "./w 3 fullscreen", "key": "Control+Alt+Shift+F", "sound": "sfx/swish-soft"},
+        {"pause": 0.8},
+        {"caption": "Stack them as an accordion when the screen is small."},
+        {"run": "./w 3 layout accordion horizontal vertical", "key": "Alt+Comma"},
+        {"pause": 1.6},
+        {"run": "./w 3 layout tiles horizontal vertical", "key": "Alt+Slash"},
+        {"pause": 1.2}
+      ]}
+    },
+    {
+      "name": "snaps",
+      "screen": {"steps": [
+        {"pause": 0.8},
+        {"caption": "Lift a window out of the layout, and snap it where you like."},
+        {"run": "./w 2 layout floating tiling; ./w 2 focus", "key": "Control+Alt+F"},
+        {"pause": 1.2},
+        {"run": "./w 2 snap top-left", "key": "Control+Alt+U", "sound": "sfx/swish-soft"},
+        {"pause": 1.1},
+        {"run": "./w 2 snap right-two-thirds", "key": "Control+Alt+R", "sound": "sfx/swish-soft"},
+        {"pause": 1.1},
+        {"run": "./w 2 snap center", "key": "Control+Alt+C", "sound": "sfx/swish-soft"},
+        {"pause": 1.3},
+        {"caption": "One key puts it back."},
+        {"run": "./w 2 layout floating tiling", "key": "Control+Alt+F"},
+        {"pause": 1.6}
+      ]}
+    },
+    {
+      "name": "agents",
+      "terminal": {
+        "title": "rejig",
+        "run": [
+          "rejig list-windows | jq -c '.[] | select(.app == \"Rejig\") | {id, title, state, display}'",
+          "rejig api | jq -r '.[].usage' | head -8"
+        ]
+      },
+      "caption": "Built for agents too. Every command answers, in JSON, and agents get a screen of their own."
+    },
+    {
+      "name": "end",
+      "card": {"kicker": "Rejig", "title": "make install", "subtitle": "github.com/adrianmross/rejig"},
+      "caption": "Rejig. Two steps to set up, and your windows fall into place."
+    }
+  ]
+}

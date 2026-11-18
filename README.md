@@ -198,6 +198,13 @@ touches the real displays only at a corner so the pointer can't stray onto it.
   keys and menu-bar readout leave it out, so yours don't change; macOS's own
   Control-number shortcuts and Mission Control do count it.
 
+## The launch film
+
+`reel/build.sh` films the launch clips with [reel](https://github.com/adrianmross/reel)
+into `reel/clips/`, from the storyboard in `reel/launch.json`. It films Rejig's
+own practice windows, tiled on the agent screen (`rejig agent-screen tile`), so
+nothing of yours is in the picture.
+
 ## What is public API and what is not
 
 | Capability | Mechanism | Kind |
