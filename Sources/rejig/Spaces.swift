@@ -18,9 +18,14 @@ final class Spaces {
   private var learned: [Int: Int] = [:]  // marker -> desktop number
   private var lastActive: [NSScreen: Int] = [:]  // marker showing on each display
   private var asked: (n: Int, at: Date)?
-  private var ranges: [NSScreen: Range<Int>] = [:]  // the desktop numbers each display holds
-  private(set) var current: Int?
-  private(set) var previous: Int?
+  private(set) var ranges: [NSScreen: Range<Int>] = [:]  // the desktop numbers each display holds
+  var current: Int?
+  var previous: Int?
+  // callers waiting to hear that a switch or a carry has finished; the counters retire stale timeouts
+  private var awaited: (n: Int, then: (Bool) -> Void)?
+  private var carried: ((Bool) -> Void)?
+  private var moved = false
+  private var waits = 0
 
   init() {
     let saved = savedNumbers()
@@ -48,6 +53,29 @@ final class Spaces {
     }
   }()
   private var exact = false  // the last numbers came from the window server, not the preferences file
+  private var numberOf: [Int: Int] = [:]  // the window server's Space id -> desktop number
+
+  // HACK: private API, read-only. CGSCopySpacesForWindows is the only way to ask
+  // which Space a window is on when that Space is not showing: Accessibility
+  // lists nothing there. Looked up by name at run time; nil if macOS drops it.
+  private let spacesOf: (CGWindowID) -> [Int]? = {
+    typealias Connection = @convention(c) () -> Int32
+    typealias Copy = @convention(c) (Int32, Int32, CFArray) -> Unmanaged<CFArray>?
+    let anywhere = UnsafeMutableRawPointer(bitPattern: -2)  // RTLD_DEFAULT
+    guard let connection = dlsym(anywhere, "CGSMainConnectionID"), let copy = dlsym(anywhere, "CGSCopySpacesForWindows")
+    else { return { _ in nil } }
+    return { window in
+      // 7: every kind of Space, showing or not
+      unsafeBitCast(copy, to: Copy.self)(unsafeBitCast(connection, to: Connection.self)(), 7, [window] as CFArray)?
+        .takeRetainedValue() as? [Int]
+    }
+  }()
+
+  /// The desktop a window is on, showing or not; nil for one on a full-screen Space, or when unknown.
+  func desktop(of window: CGWindowID) -> Int? {
+    _ = savedNumbers()  // desktops may have been added or removed since
+    return spacesOf(window)?.lazy.compactMap { self.numberOf[$0] }.first
+  }
 
   /// Desktop numbers as Mission Control counts them: across displays in its
   /// order, full-screen Spaces not counted.
@@ -61,11 +89,15 @@ final class Spaces {
     var out: [NSScreen: Int] = [:]
     desktops = 0
     ranges = [:]
+    numberOf = [:]
     let live = liveSpaces()
     exact = live != nil
     for monitor in live ?? (conf?["Management Data"] as? [String: Any])?["Monitors"] as? [[String: Any]] ?? [] {
       guard let spaces = monitor["Spaces"] as? [[String: Any]] else { continue }  // a display not connected
       let uuids = spaces.filter { $0["type"] as? Int == 0 }.compactMap { $0["uuid"] as? String }
+      for (i, space) in spaces.filter({ $0["type"] as? Int == 0 }).enumerated() {
+        if let id = space["id64"] as? Int { numberOf[id] = desktops + i + 1 }
+      }
       defer { desktops += uuids.count }
       let display = monitor["Display Identifier"] as? String
       let screen = display == "Main" ? NSScreen.screens.first : NSScreen.screens.first { $0.uuid == display }
@@ -99,12 +131,24 @@ final class Spaces {
     current = n
   }
 
-  /// The marker showing on each screen, creating one where a Space is new to us.
+  /// The Space showing on each screen, as a key that stays the same for that
+  /// Space: the window server's own id when it tells us, otherwise one of our
+  /// markers (negative, so the two never collide), created where a Space is new.
   /// Screens showing a full-screen Space are left out: nothing is managed there.
   func active() -> [(NSScreen, Int)] {
+    if let live = liveSpaces() {
+      return live.compactMap { monitor in
+        let display = monitor["Display Identifier"] as? String
+        guard let screen = display == "Main" ? NSScreen.screens.first : NSScreen.screens.first(where: { $0.uuid == display }),
+          let space = monitor["Current Space"] as? [String: Any], space["type"] as? Int == 0,
+          let id = space["id64"] as? Int
+        else { return nil }
+        return (screen, id)
+      }
+    }
     var out: [(NSScreen, Int)] = []
     for screen in NSScreen.screens {
-      if let key = markers.filter({ $0.value.isOnActiveSpace && $0.value.screen == screen }).keys.min() {
+      if let key = markers.filter({ $0.value.isOnActiveSpace && $0.value.screen == screen }).keys.max() {
         out.append((screen, key))
         continue
       }
@@ -121,7 +165,7 @@ final class Spaces {
         w.close()
         continue
       }
-      let key = (markers.keys.max() ?? 0) + 1
+      let key = (markers.keys.min() ?? 0) - 1
       markers[key] = w
       out.append((screen, key))
     }
@@ -160,18 +204,41 @@ final class Spaces {
     try? p.run()
   }
 
-  func switchTo(_ n: Int) -> Bool {
+  /// False when the shortcut is off. `then` hears whether the Space changed, once its slide is over.
+  func switchTo(_ n: Int, then: ((Bool) -> Void)? = nil) -> Bool {
     guard let s = shortcut(n) else { return false }
+    let showing = shown.values.contains(n)
     press(s, n)
+    guard let then else { return true }
+    if showing {  // no Space changes: only the focus moves to its display
+      after(0.2) { then(true) }
+      return true
+    }
+    finish(false)
+    awaited = (n, then)
+    waits += 1
+    let mine = waits
+    after(2) { if self.waits == mine { self.finish(false) } }
     return true
+  }
+
+  private func finish(_ ok: Bool) {
+    let f = awaited
+    awaited = nil
+    f?.then(ok)
   }
 
   /// Takes a window along to desktop `n` the way a person would: hold its title
   /// bar, press the desktop shortcut, let go once the Space has changed.
   // ponytail: a window with no bare title bar (a video window that hides it) won't
   // come along; make the grab point a per-app setting if that matters.
-  func carry(_ frame: CGRect, to n: Int) -> Bool {
+  /// `then` hears whether the Space changed under the held window.
+  func carry(_ frame: CGRect, to n: Int, then: ((Bool) -> Void)? = nil) -> Bool {
     guard let s = shortcut(n), release == nil else { return false }
+    carried = then
+    moved = false
+    waits += 1
+    let mine = waits
     let home = CGEvent(source: nil)?.location ?? .zero
     // along the top edge, the spot nearest the middle that is bare title bar, not a tab, button or field
     let bare = ["AXWindow", "AXToolbar", "AXGroup", "AXStaticText", "AXSplitGroup"]
@@ -193,7 +260,7 @@ final class Spaces {
       after(0.03 * Double(step)) { self.mouse(.leftMouseDragged, CGPoint(x: grab.x, y: grab.y + CGFloat(step) * 10)) }
     }
     after(0.3) { self.press(s, n) }
-    after(1.5) { self.letGo() }  // the Space never changed (already there): let go anyway
+    after(1.5) { if self.waits == mine { self.letGo() } }  // the Space never changed (already there): let go anyway
     return true
   }
 
@@ -217,8 +284,12 @@ final class Spaces {
       arrive(n)  // switched by swipe or Mission Control
     }
     asked = nil
-    shown = now.compactMapValues { learned[$0] }
-    if release != nil { after(0.3) { self.letGo() } }  // let the slide animation finish
+    shown = exact ? numbers : now.compactMapValues { learned[$0] }
+    if release != nil {
+      moved = true
+      after(0.3) { self.letGo() }  // let the slide animation finish
+    }
+    if let n = awaited?.n, shown.values.contains(n) { after(0.4) { self.finish(true) } }  // not some other change
   }
 
   func describe() -> String {
@@ -228,7 +299,7 @@ final class Spaces {
       "Switch to Desktop N" shortcuts: \(shortcuts)
       workspace: \(current.map(String.init) ?? "unknown"), previous: \(previous.map(String.init) ?? "unknown")
       desktop numbers from: \(exact ? "window server (private, read-only)" : "preferences and learning")
-      Spaces seen: \(markers.count), desktops: \(desktops), showing: \(shown.map { "\($0.key.localizedName)=\($0.value)" }.sorted())
+      Spaces seen: \(max(markers.count, learned.count)), desktops: \(desktops), showing: \(shown.map { "\($0.key.localizedName)=\($0.value)" }.sorted())
       """
   }
 
@@ -243,9 +314,12 @@ final class Spaces {
   }
 
   private func letGo() {
-    let r = release
+    guard let r = release else { return }
     release = nil
-    r?()
+    r()
+    let c = carried
+    carried = nil
+    after(0.1) { c?(self.moved) }  // once the mouse-up has landed
   }
 
   private func mouse(_ type: CGEventType, _ at: CGPoint) {

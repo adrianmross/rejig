@@ -1,3 +1,4 @@
+import ServiceManagement
 import SwiftUI
 import TileCore
 
@@ -16,7 +17,10 @@ final class Settings {
       ("Apps", "macwindow.on.rectangle"),
     ]
     for (name, symbol) in names {
-      let item = NSTabViewItem(viewController: NSHostingController(rootView: SettingsView(tab: name)))
+      let host = NSHostingController(rootView: SettingsView(tab: name))
+      host.title = name  // the window takes the selected tab's title
+      host.sizingOptions = []  // the window sets the size; otherwise it opens smaller than the form and crops it
+      let item = NSTabViewItem(viewController: host)
       item.label = name
       item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: name)
       tabs.addTabViewItem(item)
@@ -24,6 +28,7 @@ final class Settings {
     tabs.selectedTabViewItemIndex = names.firstIndex { $0.0 == tab } ?? 0
     let w = NSWindow(contentViewController: tabs)
     w.styleMask = [.titled, .closable]
+    w.setContentSize(NSSize(width: 560, height: 600))
     w.toolbarStyle = .preference
     w.isReleasedWhenClosed = false
     w.center()
@@ -43,6 +48,7 @@ private struct SettingsView: View {
   @State private var wasPaused = false
   @State private var linked: Bool?  // edge gaps change together; nil until touched: linked when they are equal
   @State private var presetName = ""
+  @State private var login = SMAppService.mainApp.status == .enabled
 
   var body: some View {
     Form {
@@ -54,7 +60,7 @@ private struct SettingsView: View {
       }
     }
     .formStyle(.grouped)
-    .frame(width: 560, height: 560)
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
     .onAppear { config = Config.load().0 }  // another tab may have changed it
     .onDisappear(perform: stop)
   }
@@ -62,6 +68,13 @@ private struct SettingsView: View {
   // MARK: General
 
   @ViewBuilder private var general: some View {
+    Section {
+      Toggle("Start at login", isOn: $login)
+        .onChange(of: login) { on in
+          let service = SMAppService.mainApp
+          do { try on ? service.register() : service.unregister() } catch { login = service.status == .enabled }
+        }
+    }
     Section("Windows") {
       Picker("New windows", selection: setting("newWindows", config.newWindows)) {
         Text("Float at the size macOS restores").tag("float")
@@ -75,6 +88,7 @@ private struct SettingsView: View {
         Text("Floats it where you left it").tag("float")
         Text("Adjusts the layout").tag("adjust")
       }
+      Toggle("Glide floating windows into place", isOn: setting("animate", config.animate))
       Picker("After a split", selection: setting("launcher", config.launcher)) {
         Text("Open the launcher (⌘Space)").tag("cmd-space")
         Text("Wait for a window").tag("none")
@@ -90,8 +104,22 @@ private struct SettingsView: View {
         .disabled(config.menuBar == "icon")
       LabeledContent("Looks like") {
         let numbers = ["all": "3|2*|5", "focused": "2"][config.menuBar] ?? ""
-        Text([config.menuBarIcon || numbers.isEmpty ? "▦" : "", numbers].filter { !$0.isEmpty }.joined(separator: " "))
-          .monospaced()
+        HStack(spacing: 4) {
+          if config.menuBarIcon || numbers.isEmpty { Image(systemName: "rectangle.split.2x1") }
+          Text(numbers).monospaced()
+        }
+      }
+    }
+    Section("Learn") {
+      LabeledContent("The welcome and its tour of the keys") { Button("Relaunch Tutorial") { delegate.tour() } }
+      LabeledContent("A spare window to try things on") { Button("Open Practice Window") { delegate.practice() } }
+    }
+    Section("Configuration File") {
+      LabeledContent("~/.config/rejig/config.json, after editing it by hand") {
+        Button("Reload") {
+          manager.reload()
+          config = Config.load().0
+        }
       }
     }
   }
@@ -384,16 +412,7 @@ private struct SettingsView: View {
   }
 
   private func save(_ change: (inout [String: Any]) -> Void) {
-    var json: [String: Any] = [:]
-    if let data = try? Data(contentsOf: Config.url) {
-      // a file that doesn't parse is the user's to fix, not ours to overwrite
-      guard let old = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return NSSound.beep() }
-      json = old
-    }
-    change(&json)
-    try? FileManager.default.createDirectory(
-      at: Config.url.deletingLastPathComponent(), withIntermediateDirectories: true)
-    try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys]).write(to: Config.url)
+    guard Config.edit(change) else { return NSSound.beep() }
     manager.reload()
     config = Config.load().0
   }
@@ -533,16 +552,19 @@ private func title(_ cmds: [String]) -> String {
 }
 
 /// "ctrl-alt-left" -> "⌃⌥←"
-private func glyphs(_ binding: String?) -> String {
+private func glyphs(_ binding: String?) -> String { binding == nil ? "—" : keys(binding).joined() }
+
+/// "ctrl-alt-left" -> ["⌃", "⌥", "←"], one entry per key
+func keys(_ binding: String?) -> [String] {
   let g = [
     "ctrl": "⌃", "alt": "⌥", "shift": "⇧", "cmd": "⌘", "left": "←", "right": "→", "up": "↑", "down": "↓",
     "enter": "↩", "tab": "⇥", "backspace": "⌫", "esc": "⎋", "space": "Space", "minus": "-", "equal": "=",
     "comma": ",", "slash": "/", "semicolon": ";", "period": ".", "quote": "'", "backslash": "\\", "backtick": "`",
     "leftSquareBracket": "[", "rightSquareBracket": "]",
   ]
-  guard let binding else { return "—" }
+  guard let binding else { return [] }
   // modifiers in the order macOS writes them
   let parts = binding.split(separator: "-").map(String.init)
   let mods = ["ctrl", "alt", "shift", "cmd"].filter(parts.dropLast().contains)
-  return (mods + [parts.last ?? ""]).map { g[$0] ?? $0.uppercased() }.joined()
+  return (mods + [parts.last ?? ""]).map { g[$0] ?? $0.uppercased() }
 }

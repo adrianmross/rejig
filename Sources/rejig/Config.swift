@@ -2,7 +2,7 @@ import AppKit
 import TileCore
 
 /// Defaults mirror my AeroSpace config, except the direction keys (see `keys`);
-/// ~/.config/tilespace/config.json overrides any key.
+/// ~/.config/rejig/config.json overrides any key.
 /// Commands use AeroSpace's names so bindings can be copied across.
 struct Config: Decodable {
   var gaps = Gaps()
@@ -10,6 +10,8 @@ struct Config: Decodable {
   var float = ["keepassxc", "messages", "cisco secure client", "authenticator", "facetime"]
   /// Bundle IDs that always tile, even when their windows don't look standard.
   var tile = ["com.mitchellh.ghostty"]
+  /// Displays, by name, left entirely alone: no tiling, no borders (a capture tool's virtual display).
+  var unmanagedDisplays: [String] = []
   /// Shell commands run once at launch.
   var startup: [String] = []
   var border = Border()
@@ -24,6 +26,8 @@ struct Config: Decodable {
   /// Moving or resizing a tiled window with the mouse: "float" takes it out of the layout as you left it,
   /// "adjust" keeps it tiled (a resize moves its neighbours, a drop onto another window swaps them).
   var drag = "float"
+  /// Glide floating windows to where the snap keys send them, instead of jumping.
+  var animate = true
   /// Tiled windows: "highlight" draws borders, "shadow" a glow round the focused one, "plain" nothing.
   var style = "highlight"
   /// Pressed after `split`, to pick what fills the new half. Anything unparseable ("none") presses nothing.
@@ -63,7 +67,7 @@ struct Config: Decodable {
   var modes = Config.defaultModes("macos")
 
   static let url = FileManager.default.homeDirectoryForCurrentUser
-    .appendingPathComponent(".config/tilespace/config.json")
+    .appendingPathComponent(".config/rejig/config.json")
 
   static func defaultModes(_ keys: String, _ saved: [String: Modes] = [:]) -> Modes {
     if let preset = saved[keys] { return preset }
@@ -117,7 +121,7 @@ struct Config: Decodable {
   init() {}
 
   private enum Key: String, CodingKey { case gaps, float, tile, startup, border, modes, fixedSize, showWorkspaces, keys, newWindows, highlight
-    case style, menuBar, menuBarIcon, launcher, presets, drag
+    case style, menuBar, menuBarIcon, launcher, presets, drag, animate, unmanagedDisplays
   }
 
   init(from decoder: Decoder) throws {
@@ -139,11 +143,13 @@ struct Config: Decodable {
     menuBarIcon = try c.decodeIfPresent(Bool.self, forKey: .menuBarIcon) ?? menuBarIcon
     style = try c.decodeIfPresent(String.self, forKey: .style) ?? style
     drag = try c.decodeIfPresent(String.self, forKey: .drag) ?? drag
+    animate = try c.decodeIfPresent(Bool.self, forKey: .animate) ?? animate
     launcher = try c.decodeIfPresent(String.self, forKey: .launcher) ?? launcher
     presets = try c.decodeIfPresent([String: Modes].self, forKey: .presets) ?? presets
     float = try c.decodeIfPresent([String].self, forKey: .float) ?? float
     tile = try c.decodeIfPresent([String].self, forKey: .tile) ?? tile
     startup = try c.decodeIfPresent([String].self, forKey: .startup) ?? startup
+    unmanagedDisplays = try c.decodeIfPresent([String].self, forKey: .unmanagedDisplays) ?? unmanagedDisplays
     keys = try c.decodeIfPresent(String.self, forKey: .keys) ?? keys
     newWindows = try c.decodeIfPresent(String.self, forKey: .newWindows) ?? newWindows
     modes = Config.defaultModes(keys, presets)
@@ -151,6 +157,20 @@ struct Config: Decodable {
     for (mode, keys) in try c.decodeIfPresent([String: [String: [String]]].self, forKey: .modes) ?? [:] {
       modes[mode, default: [:]].merge(keys) { $1 }
     }
+  }
+
+  /// Changes the file's JSON in place, keeping whatever else is in it. False, and
+  /// nothing written, when the file exists but doesn't parse: it is the user's to fix.
+  static func edit(_ change: (inout [String: Any]) -> Void) -> Bool {
+    var json: [String: Any] = [:]
+    if let data = try? Data(contentsOf: url) {
+      guard let old = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
+      json = old
+    }
+    change(&json)
+    try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys]).write(to: url)
+    return true
   }
 
   /// A missing file means defaults. A broken file also means defaults, plus the error to show.

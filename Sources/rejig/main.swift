@@ -1,41 +1,74 @@
 import AppKit
-import ServiceManagement
 
-// `tilespace focus left`: hand a command to the running app, like the `aerospace` CLI
-let commandName = Notification.Name("com.adrianmross.tilespace.command")
+// `rejig focus left`: hand a command to the running app over its socket, like
+// the `rex` CLI, and wait for the answer: output on stdout, or the reason on
+// stderr and exit 1.
 if CommandLine.arguments.count > 1 {
-  DistributedNotificationCenter.default().postNotificationName(
-    commandName, object: CommandLine.arguments.dropFirst().joined(separator: " "), userInfo: nil,
-    deliverImmediately: true)
+  let words = Array(CommandLine.arguments.dropFirst())
+  switch words[0] {
+  case "--help", "-h", "help":
+    print(usage)
+  case "api":
+    let list = commands.map { ["usage": $0.usage, "does": $0.does] }
+    print(String(data: try! JSONSerialization.data(withJSONObject: list, options: [.prettyPrinted]), encoding: .utf8)!)
+  case "skill" where words.last == "install":
+    // where Claude Code looks for a user's skills
+    let dir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude/skills/rejig")
+    try! FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    try! skill.write(to: dir.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+    print(dir.appendingPathComponent("SKILL.md").path)
+  case "skill":
+    print(skill)
+  default:
+    Socket.call(words.joined(separator: " "))
+  }
   exit(0)
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-  private lazy var shortcuts = ShortcutSetup(manager.spaces) { [unowned self] in self.refresh() }
-  private lazy var permissions = Permissions { [unowned self] in
-    manager.start()
-    if !self.shortcuts.missing.isEmpty { self.shortcuts.show() }
+  private lazy var onboarding = Onboarding(manager.spaces, granted: { manager.start() }) { [unowned self] in
+    self.refresh()
   }
   private let settings = Settings()
   private var signal: DispatchSourceSignal?
+  private let server = Server()
   private let report = FileManager.default.homeDirectoryForCurrentUser
-    .appendingPathComponent("Library/Logs/tilespace-diagnostics.txt")
+    .appendingPathComponent("Library/Logs/rejig-diagnostics.txt")
 
   func applicationDidFinishLaunching(_: Notification) {
     let menu = NSMenu()
     menu.delegate = self
     item.menu = menu
     manager.onChange = { [unowned self] in self.refresh() }
-    manager.onShortcutMissing = { [unowned self] in self.shortcuts.show() }
-    refresh()
-    permissions.check()
-    DistributedNotificationCenter.default().addObserver(forName: commandName, object: nil, queue: .main) {
-      guard let command = $0.object as? String else { return }
-      // "settings", or "settings Keybindings" to open on a tab
-      let words = command.split(separator: " ").map(String.init)
-      if words.first == "settings" { self.settings.show(words.count > 1 ? words[1] : "General") } else { manager.run(command) }
+    manager.onShortcutMissing = { [unowned self] in self.onboarding.show() }
+    manager.onRun = { [unowned self] in self.onboarding.ran($0) }
+    manager.onEvent = { [unowned self] event, info in
+      var line = info
+      line["event"] = event
+      self.server.emit(line)
     }
+    manager.intercept = { [unowned self] in self.onboarding.take($0) }
+    onboarding.openSettings = { [unowned self] in self.settings.show("Keybindings") }
+    refresh()
+    onboarding.check()
+    let failure = server.start { [unowned self] command, caller, reply in
+      // "settings", or "settings Keybindings" to open on a tab; "welcome" replays
+      // the first-run welcome; "onboarding" shows its setup step
+      let words = command.split(separator: " ").map(String.init)
+      switch words.first {
+      case "welcome":
+        // "welcome play" opens it at one step
+        let steps: [String: Onboarding.Step] = ["setup": .setup, "keys": .keys, "play": .play, "done": .done, "deep": .deep]
+        self.onboarding.show(words.count > 1 ? steps[words[1]] ?? .hello : .hello)
+      case "onboarding": self.onboarding.show()
+      case "practice": self.onboarding.addPractice()  // a spare window to try things on
+      case "settings": self.settings.show(words.count > 1 ? words[1] : "General")
+      default: return manager.run(command, caller: caller, reply: reply)
+      }
+      reply(true, "")
+    }
+    if let failure { manager.note("the command socket could not be opened: \(failure)") }
 
     // `kill -USR1` writes the same report the menu copies, for use from a terminal
     Darwin.signal(SIGUSR1, SIG_IGN)
@@ -62,8 +95,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
           (spaces.shown[s].map(String.init) ?? "?") + (s == focused && screens.count > 1 ? "*" : "")
         }.joined(separator: "|")
     let state = manager.paused ? "paused" : manager.mode == "main" ? "" : manager.mode
-    item.button?.title = [c.menuBarIcon || numbers.isEmpty ? "▦" : "", numbers, state]
-      .filter { !$0.isEmpty }.joined(separator: " ")
+    // a template symbol, so it follows the menu bar's colour like every other item
+    item.button?.image =
+      c.menuBarIcon || numbers.isEmpty
+      ? NSImage(systemSymbolName: "rectangle.split.2x1", accessibilityDescription: "Rejig") : nil
+    item.button?.imagePosition = .imageLeading
+    item.button?.title = [numbers, state].filter { !$0.isEmpty }.joined(separator: " ")
   }
 
   func menuNeedsUpdate(_ menu: NSMenu) {
@@ -81,10 +118,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         parts.dropLast().compactMap { ["cmd": .command, "alt": .option, "ctrl": .control, "shift": .shift][$0] })
     }
     let info = Bundle.main.infoDictionary
-    add("Tilespace – v\(info?["CFBundleShortVersionString"] ?? "?") (\(info?["CFBundleVersion"] ?? "?"))", nil)
-    if !AXIsProcessTrusted() { add("Grant Accessibility Access…", #selector(grant)) }
-    if !shortcuts.missing.isEmpty { add("Set Up Desktop Shortcuts…", #selector(setUpShortcuts)) }
+    add("Rejig – v\(info?["CFBundleShortVersionString"] ?? "?") (\(info?["CFBundleVersion"] ?? "?"))", nil)
+    if !AXIsProcessTrusted() || !onboarding.missing.isEmpty { add("Finish Setup…", #selector(setUp)) }
     for problem in manager.problems { add(problem, nil) }
+    menu.addItem(.separator())
     let main = manager.config.modes["main"] ?? [:]
     add(
       "Tile This Workspace", #selector(tiling), on: manager.tilingHere,
@@ -95,26 +132,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         key: main.first { $0.value == ["layout floating tiling"] }?.key)
     }
     add("Pause", #selector(pause), on: manager.paused)
+    // windows an agent has taken over, and the way to take them back
+    let held = manager.held
+    if !held.isEmpty {
+      let who = Set(held).sorted().joined(separator: ", ")
+      add("Release \(held.count) Window\(held.count == 1 ? "" : "s") Held by \(who)", #selector(releaseHeld))
+    }
+    menu.addItem(.separator())
     add("Settings…", #selector(openSettings), key: "cmd-comma")
-    add("Reload Configuration", #selector(reload))
-    add("Start at Login", #selector(login), on: SMAppService.mainApp.status == .enabled)
     add("Copy Diagnostics", #selector(copyDiagnostics))
+    menu.addItem(.separator())
     add("Quit", #selector(quit), key: "cmd-q")
   }
 
-  @objc private func grant() { permissions.check() }
-  @objc private func setUpShortcuts() { shortcuts.show() }
+  @objc private func setUp() { onboarding.show() }
   @objc private func floating() { manager.run("layout floating tiling") }
   @objc private func tiling() { manager.run("tiling toggle") }
   @objc private func pause() { manager.paused.toggle() }
+  @objc private func releaseHeld() { manager.run("release") }
   @objc private func openSettings() { settings.show() }
-  @objc private func reload() { manager.reload() }
+  func tour() { onboarding.show(.hello) }
+  func practice() { onboarding.addPractice() }
   @objc private func quit() { NSApp.terminate(nil) }
-
-  @objc private func login() {
-    let service = SMAppService.mainApp
-    do { try service.status == .enabled ? service.unregister() : service.register() } catch { NSSound.beep() }
-  }
 
   @objc private func copyDiagnostics() {
     NSPasteboard.general.clearContents()

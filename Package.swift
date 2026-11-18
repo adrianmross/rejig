@@ -2,11 +2,11 @@
 import PackageDescription
 
 let package = Package(
-  name: "tilespace",
+  name: "rejig",
   platforms: [.macOS(.v13)],
   targets: [
     .target(name: "TileCore"),
-    .executableTarget(name: "tilespace", dependencies: ["TileCore"]),
+    .executableTarget(name: "rejig", dependencies: ["TileCore"]),
     .testTarget(name: "TileCoreTests", dependencies: ["TileCore"]),
   ]
 )
