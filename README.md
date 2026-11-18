@@ -1,4 +1,4 @@
-# Tilespace
+# Rejig
 
 A small Swift/AppKit tiling window manager that keeps my AeroSpace bindings but
 uses real macOS Spaces. Public APIs throughout, with one read-only private call
@@ -11,34 +11,39 @@ No scripting addition, SIP stays on.
 make install
 ```
 
-This builds `Tilespace.app`, signs it, copies it to `~/Applications` and opens it.
+This builds `Rejig.app`, signs it, copies it to `~/Applications` and opens it.
 Then:
 
-1. **Accessibility.** A panel explains what the access is for. Open the settings
-   from it, drag the icon into the list, switch it on. The panel closes by itself.
-   This is the only permission; no Screen Recording, no Input Monitoring.
-2. **Desktop shortcuts.** A second panel offers to turn on macOS's "Switch to
-   Desktop 1" to "6" shortcuts (Control-1 to Control-6 unless you chose other
-   keys), which is how workspaces are switched. One button does it; the other
-   opens System Settings > Keyboard > Keyboard Shortcuts > Mission Control to
-   tick them by hand. The panel comes back from the menu ("Set Up Desktop
-   Shortcuts…") or when you press a workspace key whose shortcut is off. From a
-   script: `tilespace enable-desktop-shortcuts`. Add desktops in Mission Control
-   if you want more workspaces; a shortcut does nothing until its desktop exists.
-3. **Start at Login** is in the ▦ menu.
+The first launch opens a welcome: a hello, the setup below, a choice of keys
+(macOS or Vim first), a checklist to try them on your own windows, and a
+goodbye. Replay it from Settings > General or with `rejig welcome`. `rejig
+practice` opens a spare floating window to try things on. The setup step ticks off two things:
+
+1. **Accessibility.** Open Settings from it, drag the icon into the list, switch
+   it on. This is the only permission; no Screen Recording, no Input Monitoring.
+2. **Desktop shortcuts.** "Turn On" ticks macOS's "Switch to Desktop 1" to "6"
+   (Control-1 to Control-6 unless you chose other keys), which is how workspaces
+   are switched. From a script: `rejig enable-desktop-shortcuts`. Add desktops
+   in Mission Control if you want more workspaces; a shortcut does nothing until
+   its desktop exists.
+
+After the first run the setup step closes by itself when both are done, and
+comes back from the menu or when you press a workspace key whose shortcut is off.
+
+3. **Start at login** is in Settings > General.
 
 Recommended in System Settings > Desktop & Dock: turn off "Automatically
 rearrange Spaces based on most recent use" (otherwise desktop numbers shuffle),
 and it is fine to leave macOS's own tiling on ("Drag windows to screen edges to
-tile", Window > Move & Resize): Tilespace never writes a floating window's frame,
+tile", Window > Move & Resize): Rejig never writes a floating window's frame,
 so native tiling works on floating windows and on workspaces with tiling off. On
 a tiled window, a native tile is treated like any mouse resize.
 
 ## Configuration
 
-"Settings…" in the ▦ menu (or `tilespace settings`) covers gaps, borders, float rules, the menu-bar readout,
+"Settings…" in the ▦ menu (or `rejig settings`) covers gaps, borders, float rules, the menu-bar readout,
 new and fixed-size windows, borders, the direction-key preset, and every shortcut: click one, press
-the new keys. It writes `~/.config/tilespace/config.json`, which can also be edited
+the new keys. It writes `~/.config/rejig/config.json`, which can also be edited
 by hand; the file holds only the keys that differ from the defaults:
 
 ```json
@@ -63,12 +68,13 @@ by hand; the file holds only the keys that differ from the defaults:
 tile, like System Settings with its fixed width: `"float"` (default) takes it out
 of the layout, `"tile"` keeps it in at whatever size it does take. `menuBar` is
 `"all"` (every display's workspace), `"focused"` (one number) or `"icon"`;
-`menuBarIcon` adds ▦ before the numbers. `style` is `"highlight"` (borders),
+`menuBarIcon` adds the icon before the numbers. `animate` (default on) glides
+floating windows to where the snap keys send them; turn it off if an app stutters. `style` is `"highlight"` (borders),
 `"shadow"` (a glow round the focused window) or `"plain"`. `keys` picks the
 keybinding preset: `"macos"` (default) is Control-Option-arrows to focus and
 Control-Option-Shift-arrows to move, `"vim"` is Option-h/j/k/l as in AeroSpace,
 `"rex"` puts everything on Control-Command (numbers, `[` `]`, `D`), and presets
-saved from Settings live under `presets`. `newWindows` is what happens to a window opened after Tilespace started:
+saved from Settings live under `presets`. `newWindows` is what happens to a window opened after Rejig started:
 `"float"` (default) leaves it where and at the size macOS restored it until you
 toggle it into the layout (`Option-Control-F`), `"tile"` lays it out at once, which
 shows as a jump because a window can only be resized after it appears. Windows
@@ -77,7 +83,7 @@ turns the borders off. In
 `modes`, an empty list (`"alt-tab": []`) unbinds a default key.
 
 Bindings and commands use AeroSpace's names (`alt-shift-h`, `move left`,
-`resize smart -50`, ...). Reload from the menu, or `Option-Shift-;` then `Esc`.
+`resize smart -50`, ...). Reload from Settings > General, or `Option-Shift-;` then `Esc`.
 
 ## Controls
 
@@ -126,12 +132,52 @@ of its tile (System Settings has a fixed width) floats automatically, unless
 Any command can also be sent from a terminal, like the `aerospace` CLI:
 
 ```sh
-tilespace focus left
+rejig focus left
 ```
 
 `Backspace` in service mode closes every other tiled window on the
 workspace by pressing each window's own close button, so apps still show their
 unsaved-changes prompts and nothing is discarded silently.
+
+## Scripting
+
+`rejig <command>` talks to the running app over a Unix socket
+(`~/Library/Application Support/rejig/server.sock`, readable by you alone) and
+waits for its answer: output on stdout, or the reason on stderr with exit
+status 1. It returns when the command has finished, including a workspace
+slide. `rejig --help` lists the commands, `rejig api` gives the same list as
+JSON, and `rejig skill show` prints a guide for agents (`rejig skill install`
+puts it in `~/.claude/skills/rejig`).
+
+The socket speaks JSON lines: send `{"command": "focus left"}`, read
+`{"ok": true, "out": ""}`. `{"command": "subscribe"}` keeps the connection
+open and receives one event per line.
+
+- `--window-id <CGWindowID>` on any window command acts on that window instead
+  of the focused one. The number is matched to a window by owning app and frame.
+- `rejig list-windows` and `rejig list-workspaces` print JSON.
+- `rejig move-node-to-workspace 3 --window-id ID --stay` sends a window away and
+  puts your workspace, focus and pointer back. `rejig fetch --window-id ID
+  --workspace 3` goes and gets it. Each plays the Space slide twice.
+- `rejig hold --window-id ID --by NAME` hands a window to an agent: Rejig never
+  tiles, resizes or focuses it until `rejig release` (all, or one with
+  `--window-id`). Add `--workspace N` to send it there in the same step. While
+  anything is held the menu shows "Release N Windows Held by NAME".
+  `--owner-pid PID` ends the hold when that process exits, so a crashed agent
+  leaves nothing held.
+- `--rex-session LABEL` in place of `--window-id` names the macOS window showing
+  that Rex session (matched by its title). On `hold` it also ends the hold when
+  the session ends.
+- `rejig subscribe` prints events as JSON lines until interrupted:
+  `window-opened`, `window-closed`, `focus-changed` (each with id, pid, app,
+  title), `workspace-changed` (the desktop showing on each display) and
+  `held-changed`.
+- `list-windows` also lists windows Rejig has never met (state `unseen`), such
+  as those on hidden desktops after a restart, with what the window server
+  knows: id, pid, app, frame and workspace, but no title.
+- `rejig move --frame x,y,w,h --window-id ID` floats a window at an exact frame,
+  in points from the main display's top-left; it fails if the window refuses it.
+- `"unmanagedDisplays": ["name"]` in the config keeps Rejig off a display.
 
 ## What is public API and what is not
 
@@ -140,10 +186,11 @@ unsaved-changes prompts and nothing is discarded silently.
 | Hotkeys | Carbon `RegisterEventHotKey` | documented public API |
 | Find, focus, move, resize, close windows | Accessibility (`AXUIElement`, `AXObserver`) | documented public API |
 | App, Space, wake, display events | `NSWorkspace` and `NSApplication` notifications | documented public API |
-| Which Space is showing | own invisible marker window per Space, `NSWindow.isOnActiveSpace` | documented public API, used indirectly |
+| Which Space is showing | the id in `CGSCopyManagedDisplaySpaces` (below). Without it: own invisible marker window per Space, `NSWindow.isOnActiveSpace` | **private API**, with a public fallback |
 | Switch to Space N | posts your "Switch to Desktop N" shortcut (`CGEvent`) | user-configured shortcut |
 | Move a window to Space N | holds the title bar with a synthetic mouse press, then posts the shortcut | UI automation |
 | Desktop numbers | `CGSCopyManagedDisplaySpaces`, marked `HACK` in `Spaces.swift`; read-only, found by name at run time. Without it: learned when switching by number, and read from the `com.apple.spaces` preferences at launch | **private API**, with a public fallback |
+| Which desktop a window is on, when it is not showing | `CGSCopySpacesForWindows`, marked `HACK` in `Spaces.swift`; read-only, found by name at run time. Without it: only for windows Rejig has watched | **private API**, with a public fallback |
 | Turning on the desktop shortcuts | writes `com.apple.symbolichotkeys`, then runs macOS's `activateSettings -u` so it applies without logging out | public call, undocumented keys and tool |
 | Move a Space to another display | not possible | private API only; Mission Control lifts a desktop for a synthetic drag but refuses the drop on another display |
 | Permission-granted event | `com.apple.accessibility.api` distributed notification | public API, undocumented name |
@@ -184,7 +231,7 @@ logic, but not yet exercised live.
 | Move workspace to next monitor | partial | sends the workspace's tiled windows to the next monitor; the Space itself cannot move. Automating the Mission Control drag was tried and macOS refused the drop |
 | Workspace to monitor assignment | unsupported | arrange desktops per display in Mission Control once; macOS remembers per display |
 | Persistent workspaces | working | native Spaces persist by themselves |
-| Service mode | working | entered and left with the real hotkeys (`tilespace press <keys>` types them from the app) |
+| Service mode | working | entered and left with the real hotkeys (`rejig press <keys>` types them from the app) |
 | Mouse follows focus to another monitor | built | |
 | Borders | working | exact colours and width measured on screen; tiled windows only, floating windows have none |
 | Per-workspace tiling on/off | working | not in AeroSpace; exercised through the CLI |
@@ -200,11 +247,11 @@ logic, but not yet exercised live.
 "Copy Diagnostics" in the menu, or from a terminal:
 
 ```sh
-pkill -USR1 -x tilespace
+pkill -USR1 -x rejig
 ```
 
 ```sh
-cat "$HOME/Library/Logs/tilespace-diagnostics.txt"
+cat "$HOME/Library/Logs/rejig-diagnostics.txt"
 ```
 
 The report shows permission state, which desktop shortcuts are on, hotkeys that
@@ -212,7 +259,7 @@ could not be registered, reconcile timings, and every tiled window per display.
 
 ## Troubleshooting
 
-- **Nothing tiles.** Accessibility is off, or Tilespace is paused (it starts
+- **Nothing tiles.** Accessibility is off, or Rejig is paused (it starts
   paused if AeroSpace is running). Check the menu.
 - **Beep on Option-number.** That desktop's shortcut is off; the setup panel opens.
 - **Option-number does nothing.** That desktop doesn't exist; add it in Mission Control.
@@ -230,8 +277,8 @@ To remove it completely:
 make uninstall
 ```
 
-AeroSpace's config is untouched. Start AeroSpace again after quitting Tilespace;
-if both are running, Tilespace starts paused.
+AeroSpace's config is untouched. Start AeroSpace again after quitting Rejig;
+if both are running, Rejig starts paused.
 
 ## Development
 
