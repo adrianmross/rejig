@@ -3,13 +3,17 @@
 <plist version="1.0">
 <dict>
   <key>CFBundleIdentifier</key>
-  <string>com.adrianmross.tilespace</string>
+  <string>com.adrianmross.rejig</string>
   <key>CFBundleName</key>
-  <string>Tilespace</string>
+  <string>Rejig</string>
   <key>CFBundleExecutable</key>
-  <string>tilespace</string>
+  <string>rejig</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
+  <key>CFBundleIconFile</key>
+  <string>AppIcon</string>
+  <key>CFBundleIconName</key>
+  <string>AppIcon</string>
   <key>CFBundleShortVersionString</key>
   <string>0.1.0</string>
   <key>CFBundleVersion</key>

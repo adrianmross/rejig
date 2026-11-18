@@ -1,0 +1,44 @@
+{
+  "fill" : {
+    "automatic-gradient" : "srgb:0.13000,0.14500,0.22000,1.00000"
+  },
+  "groups" : [
+    {
+      "layers" : [
+        {
+          "image-name" : "front.png",
+          "name" : "front"
+        }
+      ],
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "translucency" : {
+        "enabled" : false,
+        "value" : 0.5
+      }
+    },
+    {
+      "layers" : [
+        {
+          "image-name" : "under.png",
+          "name" : "under"
+        }
+      ],
+      "shadow" : {
+        "kind" : "none",
+        "opacity" : 0.5
+      },
+      "translucency" : {
+        "enabled" : false,
+        "value" : 0.5
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "squares" : [
+      "macOS"
+    ]
+  }
+}
