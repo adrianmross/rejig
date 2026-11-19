@@ -150,6 +150,7 @@ final class Manager {
   private var pending = false
   private var dragged = false
   private var putOff = false  // a reconcile was put off until the mouse button comes up
+  private var followDrop = false  // the next reconcile follows a drop: focus goes with a window that changed display
   private var lastLayout = Date.distantPast
   private(set) var lastScreen: NSScreen?  // the display with keyboard focus
   private var stats = (count: 0, lastMs: 0.0, maxMs: 0.0)
@@ -204,6 +205,7 @@ final class Manager {
         // not at once: a window dropped on another desktop is still on its way there
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
           self.everything = true
+          self.followDrop = true
           self.schedule()
         }
       }
@@ -543,6 +545,9 @@ final class Manager {
       }
     }
 
+    // a window the user just dropped on another display (in Mission Control, say) takes the focus with it
+    let dropped = followDrop ? home.first { id, to in trees.values.contains { $0 !== to && $0.contains(id) } }?.key : nil
+    followDrop = false
     // a workspace with tiling off keeps its tree as it was, for when tiling comes back
     for tree in trees.values where tree.enabled {
       let showing = active.contains { $0.tree === tree }
@@ -563,6 +568,7 @@ final class Manager {
       adoptManualChanges()
     }
     relayout()
+    if let dropped { activate(dropped) }
 
     if !opened.isEmpty {
       for (n, id) in windowNumbers() { numbers[id] = n }
@@ -638,7 +644,9 @@ final class Manager {
     // preview or a panel, which come and go faster than we hear of it.
     if let focused, rects[focused] == nil, seen[focused] != nil, !dragged, ignored[focused] == nil, let w = wins[focused],
       let known = cache[w.pid]?.first(where: { $0.id == focused }), known.standard, !known.fullscreen,
-      let f = w.frame, f.width > 100, f.height > 100
+      let f = w.frame, f.width > 100, f.height > 100,
+      // not something the size of a display: the Finder's desktop is a window too
+      !NSScreen.screens.contains(where: { f.width >= $0.frame.width && f.height >= $0.frame.height - 40 })
     {
       marked.append((f, true))
     }
@@ -910,6 +918,11 @@ final class Manager {
       }
       if spaces.switchTo(to, then: { reply($0, $0 ? "" : "workspace \(to) did not appear") }) {
         result = nil
+        // the marks belong to the desktop being left: off before the slide, not after it
+        rects = [:]
+        seen = [:]
+        drawBorders()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { self.schedule() }  // back, if nothing changed after all
       } else {
         shortcutMissing(to)
         result = (false, "the Switch to Desktop \(to) shortcut is off")
