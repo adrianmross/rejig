@@ -119,6 +119,22 @@ with `U` `I` `J` `K` for the quarters, `D` `S` `G` for thirds, `E` `R` for two
 thirds, `C` to centre, Return to maximise and Delete to restore the size from
 before the first snap. (`F` and `T` are already taken here, hence `S` and `R`.)
 A tiled window leaves the layout to take a place.
+
+The ▦ menu's "Snap This Window" lists every place with its picture and keys, and
+"Move in Layout" and "Join With" do the same for a tile. More from Rectangle:
+left or right half pressed again goes to two thirds, then a third (`cycle`);
+`snap almost-maximize` and `snap maximize-height`; `move-to-display next|prev`
+(Control-Option-Command-arrows); `stack next|prev` steps through windows piled on
+the same spot; a snapped window dragged away takes back its earlier size
+(`restoreOnDrag`). `edgeSnap` (off by default) snaps a window dragged to a screen
+edge or corner, showing where it will land; turn off "Drag windows to screen
+edges to tile" in System Settings › Desktop & Dock first, or both will act.
+`haptics` taps the trackpad at a snap place, `cursorFollows` takes the pointer to
+the other display with the window, and `stageStrip` keeps that many points clear
+for Stage Manager's strip while Stage Manager is on. The grow and shrink keys
+repeat while held, and work on floating windows too. Settings › General exports
+and imports the config file. With `"style": "shadow"` the glow's size is
+`border.width` ("Shadow size" in Settings › Appearance › Advanced).
 macOS's own keys work on them too (Cmd-Tab, Cmd-`, and Window > Move & Resize).
 
 With the mouse: moving or resizing a tiled window takes it out of the layout,

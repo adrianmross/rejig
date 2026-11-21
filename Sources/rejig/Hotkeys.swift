@@ -5,9 +5,15 @@ import Carbon.HIToolbox
 final class Hotkeys {
   private var refs: [EventHotKeyRef?] = []
   private var actions: [UInt32: () -> Void] = [:]
+  private var held: Set<UInt32> = []  // the ones that go on acting while the keys are down
+  private var again: Timer?
 
   init() {
-    var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+    // Carbon tells of a press and a release and nothing between: holding a key is ours to make repeat
+    var spec = [
+      EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed)),
+      EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyReleased)),
+    ]
     InstallEventHandler(
       GetApplicationEventTarget(),
       { _, event, ctx in
@@ -15,17 +21,27 @@ final class Hotkeys {
         GetEventParameter(
           event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil,
           MemoryLayout<EventHotKeyID>.size, nil, &id)
-        Unmanaged<Hotkeys>.fromOpaque(ctx!).takeUnretainedValue().actions[id.id]?()
+        let me = Unmanaged<Hotkeys>.fromOpaque(ctx!).takeUnretainedValue()
+        me.again?.invalidate()
+        guard GetEventKind(event) == UInt32(kEventHotKeyPressed), let action = me.actions[id.id] else { return noErr }
+        action()
+        if me.held.contains(id.id) {
+          // after a pause, like a typed key; then no faster than a window can keep up with
+          me.again = Timer(fire: Date() + 0.3, interval: 0.12, repeats: true) { _ in action() }
+          RunLoop.main.add(me.again!, forMode: .common)
+        }
         return noErr
-      }, 1, &spec, Unmanaged.passUnretained(self).toOpaque(), nil)
+      }, 2, &spec, Unmanaged.passUnretained(self).toOpaque(), nil)
   }
 
   /// Replaces every registered hotkey. Returns the bindings that could not be
   /// registered: unknown key names, or combinations something else already owns.
-  func set(_ bindings: [(String, () -> Void)]) -> [String] {
+  func set(_ bindings: [(String, () -> Void)], held holdable: Set<String> = []) -> [String] {
     refs.forEach { UnregisterEventHotKey($0) }
     refs = []
     actions = [:]
+    held = []
+    again?.invalidate()
     var refused: [String] = []
     for (i, (name, action)) in bindings.enumerated() {
       var ref: EventHotKeyRef?
@@ -36,6 +52,7 @@ final class Hotkeys {
       {
         refs.append(ref)
         actions[UInt32(i)] = action
+        if holdable.contains(name) { held.insert(UInt32(i)) }
       } else {
         refused.append(name)
       }

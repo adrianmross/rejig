@@ -146,16 +146,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   func menuNeedsUpdate(_ menu: NSMenu) {
     menu.removeAllItems()
     // `key` is a binding in the config's spelling, e.g. "cmd-q" or "ctrl-alt-t"
-    func add(_ title: String, _ action: Selector?, on: Bool = false, key: String? = nil) {
+    @discardableResult
+    func add(_ title: String, _ action: Selector?, on: Bool = false, key: String? = nil, to menu: NSMenu = menu) -> NSMenuItem {
       let i = menu.addItem(withTitle: title, action: action, keyEquivalent: "")
       i.target = self
       i.state = on ? .on : .off
       let parts = (key ?? "").split(separator: "-").map(String.init)
-      guard let last = parts.last, let char = ["comma": ",", "tab": "\t", "enter": "\r"][last] ?? (last.count == 1 ? last : nil)
-      else { return }
+      let named = [
+        "comma": ",", "tab": "\t", "enter": "\r", "backspace": "\u{8}", "left": "\u{F702}", "right": "\u{F703}",
+        "up": "\u{F700}", "down": "\u{F701}",
+      ]
+      guard let last = parts.last, let char = named[last] ?? (last.count == 1 ? last : nil) else { return i }
       i.keyEquivalent = char
       i.keyEquivalentModifierMask = NSEvent.ModifierFlags(
         parts.dropLast().compactMap { ["cmd": .command, "alt": .option, "ctrl": .control, "shift": .shift][$0] })
+      return i
     }
     let info = Bundle.main.infoDictionary
     add("Rejig – v\(info?["CFBundleShortVersionString"] ?? "?") (\(info?["CFBundleVersion"] ?? "?"))", nil)
@@ -170,6 +175,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       add(
         tiled ? "Float This Window" : "Tile This Window", #selector(floating),
         key: main.first { $0.value == ["layout floating tiling"] }?.key)
+    }
+    // a submenu of commands, each with a picture of what it does and its key; a nil is a dividing line
+    func submenu(_ name: String, _ list: [String?], keys table: [String: [String]], note: String? = nil) {
+      let sub = NSMenu()
+      if let note { add(note, nil, to: sub) }
+      for command in list {
+        guard let command else {
+          sub.addItem(.separator())
+          continue
+        }
+        let i = add(title([command]), #selector(runItem), key: table.first { $0.value.first == command }?.key, to: sub)
+        i.image = placeIcon([command])
+        i.representedObject = command
+      }
+      add(name, nil).submenu = sub
+    }
+    if let tiled = manager.focusedTiled {
+      submenu(
+        "Snap This Window",
+        [
+          "snap left-half", "snap right-half", "snap top-half", "snap bottom-half", nil, "snap top-left",
+          "snap top-right", "snap bottom-left", "snap bottom-right", nil, "snap left-third", "snap center-third",
+          "snap right-third", "snap left-two-thirds", "snap right-two-thirds", nil, "snap maximize",
+          "snap almost-maximize", "snap maximize-height", "snap center", "snap restore", nil, "move-to-display next",
+          "move-to-display prev",
+        ], keys: main)
+      if tiled {
+        submenu(
+          "Move in Layout",
+          [
+            "move left", "move right", "move up", "move down", nil, "split right", "split down", nil,
+            "layout tiles horizontal vertical", "layout accordion horizontal vertical", nil, "resize smart +50",
+            "resize smart -50", "fullscreen",
+          ], keys: main)
+        // joining is a key pressed in service mode: say how to get there
+        let service = main.first { $0.value == ["mode service"] }?.key
+        submenu(
+          "Join With", ["join-with left", "join-with right", "join-with up", "join-with down"],
+          keys: manager.config.modes["service"] ?? [:], note: service.map { "Keys work after \(keys($0).joined())" })
+      }
     }
     add("Pause", #selector(pause), on: manager.paused)
     // windows an agent has taken over, and the way to take them back
@@ -189,6 +234,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   @objc private func setUp() { onboarding.show() }
   @objc private func floating() { manager.run("layout floating tiling") }
   @objc private func tiling() { manager.run("tiling toggle") }
+  @objc private func runItem(_ item: NSMenuItem) { manager.run(item.representedObject as? String ?? "") }
   @objc private func pause() { manager.paused.toggle() }
   @objc private func showAgentScreen() { manager.agentScreen.show() }
   @objc private func releaseHeld() { manager.run("release") }

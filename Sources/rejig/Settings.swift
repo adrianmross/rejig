@@ -27,14 +27,18 @@ final class Settings {
     }
     tabs.selectedTabViewItemIndex = names.firstIndex { $0.0 == tab } ?? 0
     let w = NSWindow(contentViewController: tabs)
-    w.styleMask = [.titled, .closable]
+    // resizable in height, for the long list of keys; that is also what makes it a window the focus keys reach
+    w.styleMask = [.titled, .closable, .resizable]
     w.setContentSize(NSSize(width: 560, height: 600))
+    w.contentMinSize = NSSize(width: 560, height: 400)
+    w.contentMaxSize = NSSize(width: 560, height: 2000)
     w.toolbarStyle = .preference
     w.isReleasedWhenClosed = false
     w.center()
     window = w
     NSApp.activate(ignoringOtherApps: true)
     w.makeKeyAndOrderFront(nil)
+    manager.look()
   }
 }
 
@@ -94,6 +98,21 @@ private struct SettingsView: View {
         Text("Wait for a window").tag("none")
       }
     }
+    Section("Snapping") {
+      Toggle(isOn: setting("edgeSnap", config.edgeSnap)) {
+        Text("Snap windows dragged to a screen edge")
+        Text("Turn off “Drag windows to screen edges to tile” in System Settings › Desktop & Dock, or both will act.")
+      }
+      Toggle("A tap from the trackpad when a dragged window reaches a place", isOn: setting("haptics", config.haptics))
+        .disabled(!config.edgeSnap)
+      Toggle("A snapped window dragged away takes back its size", isOn: setting("restoreOnDrag", config.restoreOnDrag))
+      Toggle("Snapping to a half again goes on to two thirds, then a third", isOn: setting("cycle", config.cycle))
+      Toggle("The pointer goes with a window sent to another display", isOn: setting("cursorFollows", config.cursorFollows))
+      Stepper(
+        config.stageStrip > 0
+          ? "Room kept for Stage Manager's strip: \(Int(config.stageStrip))" : "Room kept for Stage Manager's strip: none",
+        value: setting("stageStrip", config.stageStrip), in: 0...400, step: 10)
+    }
     Section("Menu Bar") {
       Picker("Show", selection: setting("menuBar", config.menuBar)) {
         Text("Every display's workspace").tag("all")
@@ -117,6 +136,29 @@ private struct SettingsView: View {
     Section("Configuration File") {
       LabeledContent("~/.config/rejig/config.json, after editing it by hand") {
         Button("Reload") {
+          manager.reload()
+          config = Config.load().0
+        }
+      }
+      LabeledContent("Take it to another Mac, or bring one in") {
+        Button("Export…") {
+          let panel = NSSavePanel()
+          panel.nameFieldStringValue = "rejig-config.json"
+          guard panel.runModal() == .OK, let to = panel.url else { return }
+          try? ((try? Data(contentsOf: Config.url)) ?? Data("{}".utf8)).write(to: to)
+        }
+        Button("Import…") {
+          let panel = NSOpenPanel()
+          panel.allowedContentTypes = [.json]
+          // only a file that reads as a config; the one it replaces is kept beside it
+          guard panel.runModal() == .OK, let from = panel.url, let data = try? Data(contentsOf: from),
+            (try? JSONDecoder().decode(Config.self, from: data)) != nil
+          else { return NSSound.beep() }
+          try? FileManager.default.createDirectory(at: Config.url.deletingLastPathComponent(), withIntermediateDirectories: true)
+          let backup = Config.url.deletingPathExtension().appendingPathExtension("backup.json")
+          try? FileManager.default.removeItem(at: backup)
+          try? FileManager.default.copyItem(at: Config.url, to: backup)
+          try? data.write(to: Config.url)
           manager.reload()
           config = Config.load().0
         }
@@ -161,7 +203,7 @@ private struct SettingsView: View {
     Section {
       DisclosureGroup("Advanced") {
         Stepper(
-          "Border width: \(Int(config.border.width))", value: nested("border", ["width"], config.border.width),
+          "\(config.style == "shadow" ? "Shadow size" : "Border width"): \(Int(config.border.width))", value: nested("border", ["width"], config.border.width),
           in: 1...12)
         ColorPicker("Focused window", selection: colour("active", config.border.activeColor), supportsOpacity: false)
         ColorPicker("Other windows", selection: colour("inactive", config.border.inactiveColor), supportsOpacity: false)
@@ -261,15 +303,37 @@ private struct SettingsView: View {
 
   private func row(_ mode: String, _ cmds: [String]) -> some View {
     let id = "\(mode)/\(cmds)"
-    return LabeledContent(title(cmds)) {
+    let bound = (config.modes[mode] ?? [:]).filter { $0.value == cmds }.keys
+    return LabeledContent {
       Button(recording == id ? "Press keys…  Esc cancels" : glyphs(key(mode, cmds))) { record(id, mode, cmds) }
+      Button {
+        save { json in
+          var modes = json["modes"] as? [String: [String: [String]]] ?? [:]
+          for old in bound { modes[mode, default: [:]][old] = [] }
+          json["modes"] = modes
+        }
+      } label: {
+        Image(systemName: "xmark")
+      }
+      .buttonStyle(.plain)
+      .help("Remove this shortcut")
+      .opacity(bound.isEmpty ? 0 : 0.6)
+      .disabled(bound.isEmpty)
+    } label: {
+      HStack(spacing: 8) {
+        if let icon = placeIcon(cmds) { Image(nsImage: icon).renderingMode(.template) }
+        Text(title(cmds))
+      }
     }
   }
 
   /// Every command any preset or the file binds, including ones left without a key.
   private func commands(_ mode: String) -> [[String]] {
     let tables = [Config.defaultModes("macos"), Config.defaultModes(config.keys, config.presets), config.modes]
-    let all = tables.flatMap { Array(($0[mode] ?? [:]).values) }
+    // and the ones no preset gives a key
+    let unbound = ["snap almost-maximize", "snap maximize-height", "stack next", "stack prev", "snap left-half",
+      "snap right-half", "snap top-half", "snap bottom-half"].map { [$0] }
+    let all = tables.flatMap { Array(($0[mode] ?? [:]).values) } + (mode == "main" ? unbound : [])
     return Set(all.filter { !$0.isEmpty }).sorted { title($0).localizedStandardCompare(title($1)) == .orderedAscending }
   }
 
@@ -413,7 +477,7 @@ private struct SettingsView: View {
 
   private func save(_ change: (inout [String: Any]) -> Void) {
     guard Config.edit(change) else { return NSSound.beep() }
-    manager.reload()
+    manager.reload(changedOnly: true)
     config = Config.load().0
   }
 }
@@ -508,8 +572,8 @@ private struct Blueprint: View {
 
 private func category(_ cmds: [String]) -> String {
   switch cmds[0].split(separator: " ").first.map(String.init) ?? "" {
-  case "focus": return "Focus"
-  case "move": return "Move"
+  case "focus", "stack": return "Focus"
+  case "move", "move-to-display": return "Move"
   case "snap": return "Snap"
   case "split", "join-with": return "Split"
   case "workspace", "workspace-back-and-forth", "move-node-to-workspace", "move-workspace-to-monitor":
@@ -519,20 +583,24 @@ private func category(_ cmds: [String]) -> String {
 }
 
 /// A command in plain words, e.g. "move-node-to-workspace 3" -> "Move window to workspace 3".
-private func title(_ cmds: [String]) -> String {
+func title(_ cmds: [String]) -> String {
   let a = cmds[0].split(separator: " ").map(String.init)
   let last = a.last ?? ""
   switch a[0] {
   case "focus": return "Focus \(last)"
   case "move": return "Move \(last)"
   case "join-with": return "Join with the window \(last)"
+  case "stack": return last == "prev" ? "Previous window in the pile" : "Next window in the pile"
+  case "move-to-display": return last == "prev" ? "Move to previous display" : "Move to next display"
   case "split": return "Split \(last)"
   case "snap":
     return [
       "top-left": "Top left quarter", "top-right": "Top right quarter", "bottom-left": "Bottom left quarter",
       "bottom-right": "Bottom right quarter", "left-third": "Left third", "center-third": "Center third",
       "right-third": "Right third", "left-two-thirds": "Left two thirds", "right-two-thirds": "Right two thirds",
-      "center": "Center", "maximize": "Maximize", "restore": "Restore size",
+      "center": "Center", "maximize": "Maximize", "restore": "Restore size", "left-half": "Left half",
+      "right-half": "Right half", "top-half": "Top half", "bottom-half": "Bottom half",
+      "almost-maximize": "Almost maximize", "maximize-height": "Maximize height",
     ][last] ?? cmds[0]
   case "workspace": return Int(last) != nil ? "Workspace \(last)" : last == "next" ? "Next workspace" : "Previous workspace"
   case "workspace-back-and-forth": return "Last workspace"
@@ -567,4 +635,76 @@ func keys(_ binding: String?) -> [String] {
   let parts = binding.split(separator: "-").map(String.init)
   let mods = ["ctrl", "alt", "shift", "cmd"].filter(parts.dropLast().contains)
   return (mods + [parts.last ?? ""]).map { g[$0] ?? $0.uppercased() }
+}
+
+/// A little display showing what a command does to the window: where a snap puts it, which side a
+/// move takes it, the empty half a split leaves. Drawn from the same sums the snap uses. Nil for a
+/// command with nothing to picture.
+func placeIcon(_ cmds: [String]) -> NSImage? {
+  let a = cmds[0].split(separator: " ").map(String.init)
+  let name = a.last ?? ""
+  if cmds[0] == "snap restore" { return NSImage(systemSymbolName: "arrow.uturn.backward", accessibilityDescription: nil) }
+  let size = NSSize(width: 20, height: 14)
+  let screen = CGRect(origin: .zero, size: size).insetBy(dx: 0.75, dy: 0.75)
+  let area = screen.insetBy(dx: 2.25, dy: 2.25)
+  func at(_ place: String) -> CGRect {
+    TileCore.place(place, in: area, inner: 1.5, size: CGSize(width: 8, height: 5)) ?? area
+  }
+  let side = ["left": "left", "right": "right", "up": "top", "down": "bottom"]
+  let across = ["left": "right", "right": "left", "top": "bottom", "bottom": "top"]
+  // the window itself solid, its neighbours faint, a place waiting to be filled only outlined
+  var solid: [CGRect] = [], faint: [CGRect] = [], empty: [CGRect] = [], lines: [(CGPoint, CGPoint)] = []
+  switch a[0] {
+  case "stack": return NSImage(systemSymbolName: "square.stack", accessibilityDescription: nil)
+  case "move-to-display":
+    return NSImage(systemSymbolName: name == "prev" ? "arrow.left.square" : "arrow.right.square", accessibilityDescription: nil)
+  case "snap" where name == "maximize-height": solid = [at("center-third")]
+  case "snap":
+    guard TileCore.place(name, in: area, inner: 1.5, size: .zero) != nil else { return nil }
+    solid = [at(name)]
+  case "move":
+    guard let s = side[name], let o = across[s] else { return nil }
+    (solid, faint) = ([at("\(s)-half")], [at("\(o)-half")])
+  case "split":
+    guard let s = side[name], let o = across[s] else { return nil }
+    (solid, empty) = ([at("\(o)-half")], [at("\(s)-half").insetBy(dx: 0.5, dy: 0.5)])
+  case "join-with":
+    // the two of them sharing that side, one above the other or side by side
+    guard let s = side[name], let o = across[s] else { return nil }
+    let pair = s == "left" || s == "right" ? ["top-\(s)", "bottom-\(s)"] : ["\(s)-left", "\(s)-right"]
+    (solid, faint) = (pair.map(at), [at("\(o)-half")])
+  case "layout" where a.contains("floating"): (solid, faint) = ([at("center")], [area])
+  case "layout" where a.contains("accordion"):
+    (solid, faint) = ([area.insetBy(dx: 2.5, dy: 0)], [area])
+  case "layout": solid = [at("left-half"), at("right-half")]
+  case "fullscreen": solid = [area]
+  case "resize":
+    let c = CGPoint(x: area.midX, y: area.midY)
+    lines = [(CGPoint(x: c.x - 3, y: c.y), CGPoint(x: c.x + 3, y: c.y))]
+    if !name.hasPrefix("-") { lines.append((CGPoint(x: c.x, y: c.y - 3), CGPoint(x: c.x, y: c.y + 3))) }
+  default: return nil
+  }
+  let image = NSImage(size: size, flipped: true) { _ in
+    let outline = NSBezierPath(roundedRect: screen, xRadius: 3.5, yRadius: 3.5)
+    NSColor.black.withAlphaComponent(0.45).setStroke()
+    outline.stroke()
+    func pane(_ r: CGRect) -> NSBezierPath { NSBezierPath(roundedRect: r, xRadius: 1.5, yRadius: 1.5) }
+    NSColor.black.withAlphaComponent(0.3).setFill()
+    faint.forEach { pane($0).fill() }
+    NSColor.black.setFill()
+    solid.forEach { pane($0).fill() }
+    NSColor.black.setStroke()
+    empty.forEach { pane($0).stroke() }
+    for (from, to) in lines {
+      let line = NSBezierPath()
+      line.move(to: from)
+      line.line(to: to)
+      line.lineWidth = 1.5
+      line.lineCapStyle = .round
+      line.stroke()
+    }
+    return true
+  }
+  image.isTemplate = true
+  return image
 }

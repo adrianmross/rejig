@@ -22,13 +22,22 @@ final class Borders {
       overlays = style.width > 0 ? screens.indices.flatMap { i in [false, true].map { overlay(i, above: $0) } } : []
     }
     for o in overlays {
-      let origin = screens[o.screen].axFrame.origin
+      let area = screens[o.screen].axFrame
+      let origin = area.origin
       o.view.style = style
       o.view.glow = glow
-      o.view.rects = rects.filter { $0.active || !o.view.above }
+      // each display draws its own windows only: a halo at the edge would spill onto the display next door
+      o.view.rects = rects.filter { ($0.active || !o.view.above) && area.contains(CGPoint(x: $0.rect.midX, y: $0.rect.midY)) }
         .map { ($0.rect.offsetBy(dx: -origin.x, dy: -origin.y), $0.active) }
+      if o.window.alphaValue == 0 {
+        o.view.displayIfNeeded()  // never a frame of what was drawn before
+        o.window.alphaValue = 1
+      }
     }
   }
+
+  /// The focused window's mark off at once: nothing is drawn, the window server just stops showing it.
+  func dim() { overlays.filter { $0.view.above }.forEach { $0.window.alphaValue = 0 } }
 
   private func overlay(_ screen: Int, above: Bool) -> (NSWindow, BorderView, Int) {
     let w = NSWindow(
@@ -94,5 +103,35 @@ private final class BorderView: NSView {
       (active ? style.activeColor : style.inactiveColor).setFill()
       ring.fill()
     }
+  }
+}
+
+/// Where a window dragged to a screen edge will land, shown while the button is still down.
+final class Footprint {
+  private lazy var window: NSWindow = {
+    let w = NSWindow(contentRect: .zero, styleMask: .borderless, backing: .buffered, defer: false)
+    w.isReleasedWhenClosed = false
+    w.isOpaque = false
+    w.backgroundColor = .clear
+    w.ignoresMouseEvents = true
+    w.level = .floating
+    w.collectionBehavior = [.transient, .ignoresCycle]
+    let box = NSBox()
+    box.boxType = .custom
+    box.cornerRadius = 14
+    box.borderWidth = 2
+    box.borderColor = .controlAccentColor
+    box.fillColor = NSColor.controlAccentColor.withAlphaComponent(0.22)
+    w.contentView = box
+    return w
+  }()
+
+  /// `rect` in Accessibility coordinates (top-left origin); nil takes it away.
+  func show(_ rect: CGRect?) {
+    guard let rect else { return window.orderOut(nil) }
+    window.setFrame(
+      CGRect(x: rect.minX, y: NSScreen.screens[0].frame.maxY - rect.maxY, width: rect.width, height: rect.height),
+      display: true)
+    window.orderFrontRegardless()
   }
 }

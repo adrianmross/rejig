@@ -343,7 +343,7 @@ public func snap(_ frame: CGRect, in area: CGRect, _ dir: Direction, inner: CGFl
   return CGRect(x: x, y: y, width: w, height: height)
 }
 
-/// Rectangle's named places for a floating window: quarters, thirds, two thirds,
+/// Rectangle's named places for a floating window: halves, quarters, thirds, two thirds,
 /// the whole area, or centred at its own size. Nil for a name it doesn't know.
 public func place(_ name: String, in area: CGRect, inner: CGFloat, size: CGSize) -> CGRect? {
   // `count` of `parts` equal slices starting at slice `start`, with `inner` between slices
@@ -354,12 +354,15 @@ public func place(_ name: String, in area: CGRect, inner: CGFloat, size: CGSize)
   var x = (area.minX, area.width), y = (area.minY, area.height)
   switch name {
   case "maximize": break
+  case "almost-maximize": return area.insetBy(dx: area.width * 0.05, dy: area.height * 0.05)
   case "center":
     let w = min(size.width, area.width), h = min(size.height, area.height)
     return CGRect(x: area.midX - w / 2, y: area.midY - h / 2, width: w, height: h)
   case "top-left", "top-right", "bottom-left", "bottom-right":
     x = cut(area.minX, area.width, 2, name.hasSuffix("left") ? 0 : 1)
     y = cut(area.minY, area.height, 2, name.hasPrefix("top") ? 0 : 1)
+  case "left-half", "right-half": x = cut(area.minX, area.width, 2, name.hasPrefix("left") ? 0 : 1)
+  case "top-half", "bottom-half": y = cut(area.minY, area.height, 2, name.hasPrefix("top") ? 0 : 1)
   case "left-third": x = cut(area.minX, area.width, 3, 0)
   case "center-third": x = cut(area.minX, area.width, 3, 1)
   case "right-third": x = cut(area.minX, area.width, 3, 2)

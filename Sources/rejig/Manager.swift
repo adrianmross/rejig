@@ -142,6 +142,9 @@ final class Manager {
   private var adopt = false  // a manual drag just ended: take its result into the layout
   private let borders = Borders()
   private var lit: CGRect?  // the focused window's mark, as last drawn
+  private var pressed = false  // the button is down where the marked window keeps its close and minimize
+  private var leavingID: Int?  // which window that was
+  private var litID: Int?  // the window wearing the mark
   private var leaving = Date.distantPast  // when a window was last seen starting to close or minimize
   private var trees: [Int: Tree] = [:]  // by Space marker
   private var active: [(screen: NSScreen, tree: Tree)] = []
@@ -149,6 +152,11 @@ final class Manager {
   private var observers: [pid_t: AXObserver] = [:]
   private var pending = false
   private var dragged = false
+  private var snappedTo: [Int: CGRect] = [:]  // where a snap last put a window, to know it is still there
+  private let windowManager = UserDefaults(suiteName: "com.apple.WindowManager")  // Stage Manager's switches
+  private var draggedID: Int?  // the window being moved by its title bar
+  private var drop: String?  // the place it would snap to if let go now
+  private let footprint = Footprint()
   private var putOff = false  // a reconcile was put off until the mouse button comes up
   private var followDrop = false  // the next reconcile follows a drop: focus goes with a window that changed display
   private var lastLayout = Date.distantPast
@@ -194,7 +202,39 @@ final class Manager {
       }
     }
     // a manual drag or resize is left alone until the button comes up
+    // a window dragged to a screen edge or corner: show where it would land
+    NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDragged) { [unowned self] _ in
+      guard self.config.edgeSnap, !self.paused, self.draggedID != nil else { return }
+      let p = NSEvent.mouseLocation
+      guard let screen = NSScreen.screens.first(where: { $0.frame.insetBy(dx: -1, dy: -1).contains(p) }) else { return }
+      let f = screen.frame
+      // an edge with another display beyond it is a way through, not a wall
+      func wall(_ dx: CGFloat, _ dy: CGFloat) -> Bool {
+        !NSScreen.screens.contains { $0.frame.contains(CGPoint(x: p.x + dx, y: p.y + dy)) }
+      }
+      let left = p.x <= f.minX + 3 && wall(-8, 0), right = p.x >= f.maxX - 4 && wall(8, 0)
+      let top = p.y >= f.maxY - 4 && wall(0, 8), bottom = p.y <= f.minY + 3 && wall(0, -8)
+      let high = p.y > f.maxY - 120, low = p.y < f.minY + 120, west = p.x < f.minX + 120, east = p.x > f.maxX - 120
+      var place: String?
+      if (left && high) || (top && west) { place = "top-left" }
+      else if (right && high) || (top && east) { place = "top-right" }
+      else if (left && low) || (bottom && west) { place = "bottom-left" }
+      else if (right && low) || (bottom && east) { place = "bottom-right" }
+      else if left { place = "left-half" }
+      else if right { place = "right-half" }
+      else if top { place = "maximize" }
+      guard place != self.drop else { return }
+      self.drop = place
+      if place != nil, self.config.haptics { NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now) }
+      self.footprint.show(place.flatMap { TileCore.place($0, in: self.usable(screen), inner: self.config.gaps.inner, size: .zero) })
+    }
     NSEvent.addGlobalMonitorForEvents(matching: .leftMouseUp) { [unowned self] _ in
+      if let place = self.drop, let id = self.draggedID {
+        self.footprint.show(nil)
+        self.run("snap \(place) --window-id \(id)")
+      }
+      self.drop = nil
+      self.draggedID = nil
       if self.dragged {
         self.dragged = false
         self.adopt = true
@@ -213,7 +253,26 @@ final class Manager {
       // ahead of the animation. If the window stays after all, the mark is back within a second.
       // ponytail: by position, not by asking which button it was; a click there on anything else blinks the mark
       let at = CGPoint(x: NSEvent.mouseLocation.x, y: NSScreen.screens[0].frame.maxY - NSEvent.mouseLocation.y)
-      if let lit = self.lit, CGRect(x: lit.minX, y: lit.minY, width: 64, height: 34).contains(at) { self.unmark() }
+      if let lit = self.lit, CGRect(x: lit.minX, y: lit.minY, width: 64, height: 34).contains(at) {
+        self.unmark()
+      } else if self.pressed {
+        self.drawBorders()  // let go somewhere else: the mark is back
+      }
+      self.pressed = false
+    }
+    // and already on the way down, so the mark is gone before the window starts to move
+    NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) { [unowned self] _ in
+      let at = CGPoint(x: NSEvent.mouseLocation.x, y: NSScreen.screens[0].frame.maxY - NSEvent.mouseLocation.y)
+      // the same for its edges, where a resize starts
+      guard let lit = self.lit, lit.insetBy(dx: -8, dy: -8).contains(at),
+        CGRect(x: lit.minX, y: lit.minY, width: 64, height: 34).contains(at) || !lit.insetBy(dx: 8, dy: 8).contains(at)
+      else { return }
+      self.pressed = true
+      self.borders.dim()
+    }
+    // Command-M: the same, for a window minimized from the keyboard
+    NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [unowned self] e in
+      if e.keyCode == 46, e.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command { self.unmark() }
     }
     // never run two window managers against the same windows
     if !NSRunningApplication.runningApplications(withBundleIdentifier: "bobko.aerospace").isEmpty { paused = true }
@@ -226,14 +285,33 @@ final class Manager {
     }
   }
 
-  func reload() {
+  /// Reads the config file. `changedOnly` is for Settings, which saves on every click: only what the
+  /// change touches is redone, so a menu bar switch doesn't re-register every key and re-ask every app.
+  func reload(changedOnly: Bool = false) {
+    let old = config
     let (loaded, error) = Config.load()
     config = loaded
     problems = error.map { [$0] } ?? []
+    // what the layout depends on, as text: a few of these types have no == of their own
+    func layout(_ c: Config) -> String {
+      "\(c.gaps) \(c.float) \(c.tile) \(c.fixedSize) \(c.newWindows) \(c.drag) \(c.unmanagedDisplays)"
+    }
+    if !changedOnly || old.modes != config.modes { bind() }
+    if !changedOnly || layout(old) != layout(config) {
+      everything = true
+      stubborn = []  // fixedSize may have changed: judge every window afresh
+      settled = [:]
+      schedule()
+    } else {
+      drawBorders()
+      onChange()
+    }
+  }
+
+  /// One of our own windows opened or closed: nothing tells us, since we don't watch ourselves until asked.
+  func look() {
+    cache[getpid()] = nil
     everything = true
-    stubborn = []  // fixedSize may have changed: judge every window afresh
-    settled = [:]
-    bind()
     schedule()
   }
 
@@ -247,13 +325,26 @@ final class Manager {
     switch name {
     case kAXUIElementDestroyedNotification, kAXWindowMiniaturizedNotification:
       // closed, or minimized from the keyboard: nothing of it should stay drawn while we catch up
-      if let id = ids[Win(el: el, pid: pid)] { rects[id] = nil }
+      let id = ids[Win(el: el, pid: pid)]
+      if let id { rects[id] = nil }
       if name == kAXUIElementDestroyedNotification { forget(Win(el: el, pid: pid)) }
-      unmark()
+      unmark(id ?? 0)
     case kAXWindowMovedNotification, kAXWindowResizedNotification:
       if NSEvent.pressedMouseButtons != 0 {
+        // the mark comes off a window being dragged: once, and without asking the app anything mid-drag
+        if !dragged { borders.dim() }
         dragged = true
-        drawBorders()  // the mark comes off a window being dragged
+        if name == kAXWindowMovedNotification, draggedID == nil {
+          draggedID = ids[Win(el: el, pid: pid)]
+          // a snapped window pulled away takes back the size it had, under the pointer where it was held
+          if config.restoreOnDrag, let id = draggedID, let to = snappedTo.removeValue(forKey: id),
+            let was = before.removeValue(forKey: id), let w = wins[id], let f = w.frame,
+            abs(f.width - to.width) < 20, abs(f.height - to.height) < 20
+          {
+            let x = NSEvent.mouseLocation.x
+            w.setFrame(CGRect(x: x - was.width * (x - f.minX) / f.width, y: f.minY, width: was.width, height: was.height))
+          }
+        }
       } else if Date().timeIntervalSince(lastLayout) > 0.5 {  // not the echo of our own write
         schedule()
       }
@@ -263,11 +354,13 @@ final class Manager {
       let w = Win(el: el, pid: pid)
       if born.count > 100 { born = [] }  // ponytail: created things that never became windows (popovers) pile up here
       if let id = ids[w] { floatIfNew(id, pid) } else { born.insert(w) }
-      schedule()
-      // apps often size a window just after creating it; look once more when it has settled
-      DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-        self.dirty.insert(pid)
-        self.schedule()
+      // not at once: the app is busy opening it, and asking now slows the opening. Then once more when it
+      // has settled, since apps often size a window just after creating it
+      for wait in [0.25, 0.8] {
+        DispatchQueue.main.asyncAfter(deadline: .now() + wait) {
+          self.dirty.insert(pid)
+          self.schedule()
+        }
       }
     default:
       schedule()
@@ -441,9 +534,12 @@ final class Manager {
     return (error, windows, Date().timeIntervalSince(asked) * 1000)
   }
 
+  /// Settings is open: a window of ours the focus keys should reach like any other.
+  private var ownWindows: Bool { NSApp.windows.contains { $0.isVisible && $0.styleMask.contains(.resizable) } }
+
   private func adopt(_ windows: [Raw], _ app: NSRunningApplication) -> [Seen] {
     let pid = app.processIdentifier
-    // of our own windows only the practice ones count: not the welcome, the borders or the markers
+    // of our own windows only Settings and the practice ones count: not the welcome, the borders or the markers
     return windows.filter { pid != getpid() || $0.resizable && $0.standard }.map {
       (identify(Win(el: $0.el, pid: pid), app), $0.frame, $0.fullscreen, $0.resizable, $0.standard)
     }
@@ -496,7 +592,7 @@ final class Manager {
     appMs = [:]
     seen = [:]
     let apps = NSWorkspace.shared.runningApplications.filter {
-      ($0.activationPolicy == .regular || practising && $0.processIdentifier == getpid()) && !$0.isHidden
+      ($0.activationPolicy == .regular || $0.processIdentifier == getpid() && (practising || ownWindows)) && !$0.isHidden
         && !$0.isTerminated && !silent.contains($0.processIdentifier)
     }
     // the apps that need asking are asked all at once: the wait is the slowest of them, not their sum
@@ -535,7 +631,8 @@ final class Manager {
         let on = NSScreen.screens.first { $0.axFrame.contains(centre) }
         if let n = on.flatMap({ spaces.shown[$0] }) { desktop[id] = n }
         if ignored[id] != nil { continue }
-        if f.width > 100, f.height > 100 { seen[id] = f }  // for focus; not tooltips and the like
+        // for focus; not tooltips and the like, nor the Finder's desktop, which covers a display, menu bar and all
+        if f.width > 100, f.height > 100, w.fullscreen || on.map({ f.height < $0.frame.height }) ?? true { seen[id] = f }
         guard shouldTile(w, app) else { continue }
         if let screen = on {
           home[id] = active.first { $0.screen == screen }?.tree  // nil on a full-screen Space
@@ -628,16 +725,23 @@ final class Manager {
   }
 
   /// Drops the focused window's mark at once, then looks again when things have settled.
-  private func unmark() {
+  private func unmark(_ id: Int? = nil) {
     leaving = Date()
-    drawBorders()
-    schedule()
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.65) { self.schedule() }
+    leavingID = id ?? litID
+    // drawn before anything is asked of the app: it answers nothing until its animation is over
+    lit = nil
+    borders.update(config.style == "plain" ? [] : rects.map { ($0.value, false) }, config.border, glow: config.style == "shadow")
+    borders.dim()
+    // told by the app that it is gone: lay out now. Otherwise it is busy animating and would only keep us waiting
+    if id != nil { schedule() }
+    for wait in [0.7, 1.55] { DispatchQueue.main.asyncAfter(deadline: .now() + wait) { self.schedule() } }
   }
 
   private func drawBorders() {
     // a window on its way out (closing, minimizing) loses its mark at once, not when its animation ends
-    let focused = Date().timeIntervalSince(leaving) < 0.6 ? nil : focusedID()
+    // by window, and for as long as the slowest animation: macOS still calls it focused on the way down
+    let front = focusedID()
+    let focused = front == leavingID && Date().timeIntervalSince(leaving) < 1.5 ? nil : front
     var marked = rects.map { ($0.value, $0.key == focused) }
     // a floating window is marked too while it has focus: it is in front then, so its outline covers
     // nothing. Not mid-drag, when its frame is ahead of what we know; and only a real window, not a
@@ -645,12 +749,14 @@ final class Manager {
     if let focused, rects[focused] == nil, seen[focused] != nil, !dragged, ignored[focused] == nil, let w = wins[focused],
       let known = cache[w.pid]?.first(where: { $0.id == focused }), known.standard, !known.fullscreen,
       let f = w.frame, f.width > 100, f.height > 100,
-      // not something the size of a display: the Finder's desktop is a window too
-      !NSScreen.screens.contains(where: { f.width >= $0.frame.width && f.height >= $0.frame.height - 40 })
+      // not the Finder's desktop, a window too: it covers a whole display, menu bar and all, where a
+      // zoomed window stops under the menu bar
+      !NSScreen.screens.contains(where: { f.width >= $0.frame.width && f.height >= $0.frame.height })
     {
       marked.append((f, true))
     }
     lit = marked.first { $0.1 }?.0
+    litID = lit == nil ? nil : focused
     borders.update(config.style == "plain" ? [] : marked, config.border, glow: config.style == "shadow")
   }
 
@@ -658,7 +764,7 @@ final class Manager {
     rects = [:]
     let checking = !wrote.isEmpty
     for (screen, tree) in active where tree.enabled {
-      for (id, exact) in tree.layout(in: screen.axVisibleFrame, gaps: config.gaps) {
+      for (id, exact) in tree.layout(in: workArea(screen), gaps: config.gaps) {
         let r = CGRect(
           x: exact.minX.rounded(), y: exact.minY.rounded(), width: exact.width.rounded(),
           height: exact.height.rounded())
@@ -1197,8 +1303,14 @@ final class Manager {
       relayout()
     case "focus":
       // tiled and floating windows alike: whichever lies nearest that way
-      if let dir, let from = id.flatMap({ seen[$0] }) {
-        if let to = nearest(from: from, dir, in: seen) { activate(to) }
+      if let dir, let id, let from = seen[id] {
+        if let to = nearest(from: from, dir, in: seen) {
+          activate(to)
+        } else {
+          // nothing that way. A window lying over or under this one has no direction to it: step through those
+          let over = seen.filter { $0.key != id && $0.value.intersects(from) }.keys.sorted()
+          if let to = over.first(where: { $0 > id }) ?? over.first { activate(to) }
+        }
       } else if dir == nil, flags["--window-id"] != nil || flags["--rex-session"] != nil, let id {
         activate(id)  // a window named on purpose, and no direction: that window
       } else if let to = currentTree()?.focused ?? seen.keys.min() {
@@ -1211,20 +1323,79 @@ final class Manager {
         let screen = NSScreen.screens.first(where: { $0.axFrame.contains(CGPoint(x: f.midX, y: f.midY)) })
       else { break }
       if a.last == "restore" {
+        snappedTo[id] = nil
         if let was = before.removeValue(forKey: id) { glide(w, from: f, to: was) }
         break
       }
-      guard let r = place(a.last ?? "", in: usable(screen), inner: config.gaps.inner, size: f.size) else {
-        result = (false, "no such place: \(a.last ?? "")")
+      let area = usable(screen)
+      func at(_ name: String) -> CGRect? { place(name, in: area, inner: config.gaps.inner, size: f.size) }
+      var name = a.last ?? ""
+      // pressed again where the window already is, a half goes on to two thirds, then a third, then round
+      if config.cycle, name == "left-half" || name == "right-half" {
+        let sizes = [name, name.replacingOccurrences(of: "half", with: "two-thirds"), name.replacingOccurrences(of: "half", with: "third")]
+        let here = sizes.firstIndex {
+          at($0).map { abs($0.minX - f.minX) < 20 && abs($0.width - f.width) < 20 && abs($0.height - f.height) < 20 } ?? false
+        }
+        if let here { name = sizes[(here + 1) % sizes.count] }
+      }
+      // the full height, where it stands
+      let to = name == "maximize-height" ? CGRect(x: f.minX, y: area.minY, width: f.width, height: area.height) : at(name)
+      guard let r = to else {
+        result = (false, "no such place: \(name)")
         break
       }
       if before[id] == nil { before[id] = f }
+      snappedTo[id] = r
       if tree != nil {
         userTile.remove(id)
         userFloat.insert(id)
         schedule()
       }
       glide(w, from: f, to: r)
+    case "resize" where tree == nil:
+      // a floating window grows or shrinks about its centre, within its display
+      guard let id, let w = wins[id], let f = w.frame, let n,
+        let screen = NSScreen.screens.first(where: { $0.axFrame.contains(CGPoint(x: f.midX, y: f.midY)) })
+      else { break }
+      let r = f.insetBy(dx: -CGFloat(n) / 2, dy: -CGFloat(n) / 2).intersection(usable(screen))
+      if r.width >= 200, r.height >= 150 { glide(w, from: f, to: r) }
+    case "move-to-display":
+      // next or prev, left to right and round again
+      guard let id, let w = wins[id], let f = w.frame else { break }
+      let screens = NSScreen.screens.filter { !unmanaged($0) }.sorted { $0.frame.minX < $1.frame.minX }
+      guard screens.count > 1, let i = screens.firstIndex(where: { $0.axFrame.contains(CGPoint(x: f.midX, y: f.midY)) })
+      else {
+        result = (false, "no other display")
+        break
+      }
+      let to = screens[(i + (a.last == "prev" ? screens.count - 1 : 1)) % screens.count]
+      var r = f
+      if let tree, let target = active.first(where: { $0.screen == to })?.tree, target.enabled {
+        tree.remove(id)
+        target.insert(id)
+        relayout()
+        r = rects[id] ?? f
+      } else {
+        // the same place on the other display, in proportion
+        let from = usable(screens[i]), into = usable(to)
+        let (sx, sy) = (into.width / from.width, into.height / from.height)
+        r = CGRect(
+          x: into.minX + (f.minX - from.minX) * sx, y: into.minY + (f.minY - from.minY) * sy, width: f.width * sx,
+          height: f.height * sy)
+        w.setFrame(r)
+        schedule()
+      }
+      if config.cursorFollows { CGWarpMouseCursorPosition(CGPoint(x: r.midX, y: r.midY)) }
+    case "stack":
+      // windows piled on the same spot, as snapping several to one place leaves them: next or prev of the pile
+      guard let id, let f = seen[id] else { break }
+      let pile = seen.filter {
+        abs($0.value.minX - f.minX) < 20 && abs($0.value.minY - f.minY) < 20 && abs($0.value.width - f.width) < 20
+          && abs($0.value.height - f.height) < 20
+      }.keys.sorted()
+      if pile.count > 1, let i = pile.firstIndex(of: id) {
+        activate(pile[(i + (a.last == "prev" ? pile.count - 1 : 1)) % pile.count])
+      }
     case "move" where tree == nil:
       // a floating window steps through halves and quarters, then on to the next display
       guard let dir, let id, let w = wins[id], let f = w.frame,
@@ -1301,6 +1472,7 @@ final class Manager {
       w.setFrame(to)
       return drawBorders()
     }
+    borders.dim()  // the mark waits for the window to arrive rather than chase it
     let steps = 6
     for i in 1...steps {
       DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) / 60) {
@@ -1317,9 +1489,19 @@ final class Manager {
     }
   }
 
+  /// Below the menu bar and clear of the Dock; and of Stage Manager's strip, when asked and it is showing.
+  private func workArea(_ screen: NSScreen) -> CGRect {
+    let r = screen.axVisibleFrame, strip = config.stageStrip
+    guard strip > 0, windowManager?.bool(forKey: "GloballyEnabled") == true, windowManager?.bool(forKey: "AutoHide") != true
+    else { return r }
+    // the strip is on the left, or on the right when the Dock has the left
+    let dockLeft = screen.visibleFrame.minX > screen.frame.minX
+    return CGRect(x: r.minX + (dockLeft ? 0 : strip), y: r.minY, width: r.width - strip, height: r.height)
+  }
+
   /// A display's area for windows: below the menu bar, clear of the Dock, inside the outer gaps.
   private func usable(_ screen: NSScreen) -> CGRect {
-    let g = config.gaps, r = screen.axVisibleFrame
+    let g = config.gaps, r = workArea(screen)
     return CGRect(
       x: r.minX + g.left, y: r.minY + g.top, width: r.width - g.left - g.right, height: r.height - g.top - g.bottom)
   }
@@ -1346,7 +1528,9 @@ final class Manager {
       table.filter { !$0.value.isEmpty }.sorted { $0.key < $1.key }.map { key, commands in
         // hop off the Carbon callback first: a "mode" command re-registers every hotkey
         (key, { DispatchQueue.main.async { commands.forEach { self.run($0) } } })
-      })
+      },
+      // growing and shrinking go on for as long as the keys are held
+      held: Set(table.filter { !$0.value.isEmpty && $0.value.allSatisfy { $0.hasPrefix("resize") } }.keys))
     problems.removeAll { $0.hasPrefix("could not register") }
     if !refused.isEmpty { problems.append("could not register: \(refused.joined(separator: ", "))") }
     onChange()

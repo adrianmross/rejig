@@ -118,6 +118,9 @@ final class TreeTests: XCTestCase {
     XCTAssertEqual(place("center", in: a, inner: 5, size: s), CGRect(x: 305, y: 152.5, width: 400, height: 300))
     XCTAssertEqual(place("maximize", in: a, inner: 5, size: s), a)
     XCTAssertNil(place("nowhere", in: a, inner: 5, size: s))
+    XCTAssertEqual(place("almost-maximize", in: a, inner: 5, size: s)!.width, a.width * 0.9, accuracy: 0.01)
+    XCTAssertEqual(place("right-half", in: a, inner: 5, size: s)!.minX, place("top-right", in: a, inner: 5, size: s)!.minX)
+    XCTAssertEqual(place("bottom-half", in: a, inner: 5, size: s)!.width, a.width)
   }
 
   func testSnapWalksHalvesQuartersAndDisplays() {

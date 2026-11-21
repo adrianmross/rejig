@@ -26,6 +26,19 @@ struct Config: Decodable {
   /// Moving or resizing a tiled window with the mouse: "float" takes it out of the layout as you left it,
   /// "adjust" keeps it tiled (a resize moves its neighbours, a drop onto another window swaps them).
   var drag = "float"
+  /// Dragging a window to a screen edge or corner snaps it there. Off unless asked for: macOS has its
+  /// own edge tiling, on by default, and the two would both act.
+  var edgeSnap = false
+  /// Snapping to a half again where the window already is goes on to two thirds, then a third.
+  var cycle = true
+  /// A snapped window dragged away takes back the size it had before.
+  var restoreOnDrag = true
+  /// The pointer goes with a window sent to another display.
+  var cursorFollows = false
+  /// A tap from the trackpad when a dragged window reaches a place it would snap to.
+  var haptics = false
+  /// Width kept clear for Stage Manager's strip of recent apps, while Stage Manager is on. 0 keeps none.
+  var stageStrip: CGFloat = 0
   /// Glide floating windows to where the snap keys send them, instead of jumping.
   var animate = true
   /// Tiled windows: "highlight" draws borders, "shadow" a glow round the focused one, "plain" nothing.
@@ -95,6 +108,15 @@ struct Config: Decodable {
       ("s", "center-third"), ("g", "right-third"), ("e", "left-two-thirds"), ("r", "right-two-thirds"),
       ("c", "center"), ("enter", "maximize"), ("backspace", "restore"),
     ] { main["ctrl-alt-\(key)"] = ["snap \(place)"] }
+    main["ctrl-alt-cmd-right"] = ["move-to-display next"]
+    main["ctrl-alt-cmd-left"] = ["move-to-display prev"]
+    // halves on Rectangle's own keys, where the preset leaves Control-Option-arrows free
+    if keys != "macos" {
+      main["ctrl-alt-shift-up"] = ["snap maximize-height"]
+      for (key, place) in [("left", "left-half"), ("right", "right-half"), ("up", "top-half"), ("down", "bottom-half")] {
+        main["ctrl-alt-\(key)"] = ["snap \(place)"]
+      }
+    }
     var service: [String: [String]] = [
       "esc": ["reload-config", "mode main"],
       "r": ["flatten-workspace-tree", "mode main"],
@@ -121,7 +143,7 @@ struct Config: Decodable {
   init() {}
 
   private enum Key: String, CodingKey { case gaps, float, tile, startup, border, modes, fixedSize, showWorkspaces, keys, newWindows, highlight
-    case style, menuBar, menuBarIcon, launcher, presets, drag, animate, unmanagedDisplays
+    case style, menuBar, menuBarIcon, launcher, presets, drag, animate, unmanagedDisplays, edgeSnap, cycle, restoreOnDrag, cursorFollows, haptics, stageStrip
   }
 
   init(from decoder: Decoder) throws {
@@ -144,6 +166,12 @@ struct Config: Decodable {
     style = try c.decodeIfPresent(String.self, forKey: .style) ?? style
     drag = try c.decodeIfPresent(String.self, forKey: .drag) ?? drag
     animate = try c.decodeIfPresent(Bool.self, forKey: .animate) ?? animate
+    edgeSnap = try c.decodeIfPresent(Bool.self, forKey: .edgeSnap) ?? edgeSnap
+    cycle = try c.decodeIfPresent(Bool.self, forKey: .cycle) ?? cycle
+    restoreOnDrag = try c.decodeIfPresent(Bool.self, forKey: .restoreOnDrag) ?? restoreOnDrag
+    cursorFollows = try c.decodeIfPresent(Bool.self, forKey: .cursorFollows) ?? cursorFollows
+    haptics = try c.decodeIfPresent(Bool.self, forKey: .haptics) ?? haptics
+    stageStrip = try c.decodeIfPresent(CGFloat.self, forKey: .stageStrip) ?? stageStrip
     launcher = try c.decodeIfPresent(String.self, forKey: .launcher) ?? launcher
     presets = try c.decodeIfPresent([String: Modes].self, forKey: .presets) ?? presets
     float = try c.decodeIfPresent([String].self, forKey: .float) ?? float
