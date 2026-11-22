@@ -172,6 +172,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       "Tile This Workspace", #selector(tiling), on: manager.tilingHere,
       key: main.first { $0.value == ["tiling toggle"] }?.key)
     if let tiled = manager.focusedTiled {
+      add("\(NSWorkspace.shared.frontmostApplication?.localizedName ?? "This window") is \(tiled ? "tiled" : "floating")", nil)
       add(
         tiled ? "Float This Window" : "Tile This Window", #selector(floating),
         key: main.first { $0.value == ["layout floating tiling"] }?.key)

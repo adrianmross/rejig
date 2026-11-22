@@ -195,6 +195,11 @@ private struct SettingsView: View {
       Stepper(
         "Between windows: \(Int(config.gaps.inner))", value: nested("gaps", ["inner"], config.gaps.inner), in: 0...60)
       edges
+      // ponytail: 8 is macOS's tiled-window margin from memory, not measured
+      Button("Match macOS Spacing") {
+        linked = nil
+        save { $0["gaps"] = ["inner": 8, "top": 8, "left": 8, "bottom": 8, "right": 8] }
+      }
       Button("Restore Default Spacing") {
         linked = nil
         save { $0["gaps"] = nil }

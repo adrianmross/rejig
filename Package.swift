@@ -9,5 +9,6 @@ let package = Package(
     .target(name: "CVirtualDisplay"),
     .executableTarget(name: "rejig", dependencies: ["TileCore", "CVirtualDisplay"]),
     .testTarget(name: "TileCoreTests", dependencies: ["TileCore"]),
+    .testTarget(name: "RejigTests", dependencies: ["rejig"]),
   ]
 )

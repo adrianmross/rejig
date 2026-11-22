@@ -34,6 +34,12 @@ check frame move right
 check frame snap top-left
 check frame snap center
 check frame snap restore
+check frame snap left-half
+check frame snap left-half
+check frame snap almost-maximize
+check frame snap maximize-height
+check frame resize smart +50
+check frame resize smart -50
 check frame fullscreen
 check frame fullscreen
 check frame move --frame $((ax + 300)),$((ay + 200)),500,320

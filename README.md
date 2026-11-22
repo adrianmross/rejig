@@ -284,7 +284,34 @@ logic, but not yet exercised live.
 | Hotkey registration | working | all combinations register on macOS 27.2.1 |
 | Windows on other Spaces | by design | Accessibility only lists visible Spaces; hidden workspaces keep their layout untouched |
 | Manual move and resize with the mouse | built | on mouse-up: floats the window, or with `drag: adjust` resizes neighbours and swaps; not tried by hand |
+| Halves, almost maximise, maximise height, half → two thirds → third | working | not in AeroSpace; each checked by `make smoke` on the agent screen (2026-11-21), not yet watched on a real display |
+| Grow and shrink a floating window | working | checked by `make smoke` |
+| Hold a resize key to repeat | built | not tried by hand |
+| Drag to a screen edge to snap, restore on drag-away, haptics | built | needs a real pointer; not tried by hand |
+| Next / previous display, stacked windows | built | not exercised: the smoke test stays off the real displays |
+| Room for Stage Manager's strip | built | Stage Manager is off on this Mac; never exercised |
+| Windows of menu-bar-only apps | built | float, reachable by the focus and snap keys; not yet seen on one |
 | Full-screen apps | by design | a full-screen Space is left alone |
+
+## Where it stands
+
+As of 2026-11-21. Not a claim of parity: the table above says what has been
+seen and what has only been built.
+
+- **Demonstrated:** tiling, focus, move, layouts, service mode, borders, float
+  rules, workspaces by number on real Spaces, and the snap places, by hand or by
+  `make smoke`. Unit tests cover the layout engine, the config file and key names.
+- **Different from AeroSpace by design:** workspaces are real desktops, so
+  switching plays the macOS slide, and sending a window to another desktop is UI
+  automation that takes the pointer for about half a second. AeroSpace's virtual
+  workspaces do both instantly. Doing it silently on real Spaces needs a
+  scripting addition with SIP partly off, which this project does not use.
+- **Not possible:** moving a Space to another display; assigning workspaces to monitors.
+- **Recommendation:** run Rejig daily with AeroSpace quit but still installed
+  and its config untouched. Remove AeroSpace only after a week in which the
+  rollback below was never needed and the "built" rows have been tried by hand.
+  If window-to-desktop moves are a large part of the day, the slide is the cost
+  to weigh; everything else is at or past the AeroSpace config.
 
 ## Diagnostics
 
@@ -329,3 +356,14 @@ if both are running, Rejig starts paused.
 ```sh
 make test
 ```
+
+
+`make test` runs the unit tests: `TileCoreTests` for the layout engine and snap
+geometry, `RejigTests` for the config file and key names. `make smoke` drives
+the installed app through its window commands on the agent screen. `Manager.swift`
+holds state, events and reconciling; `Commands.swift` is everything `rejig
+<command>` can do.
+
+`make notarize` builds, signs with the Developer ID in the keychain, has Apple
+notarize it and leaves `build/Rejig.zip` to hand to another Mac. There is no
+self-update: installing a newer zip over the old app is the update.
