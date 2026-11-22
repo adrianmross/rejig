@@ -286,9 +286,10 @@ logic, but not yet exercised live.
 | Manual move and resize with the mouse | built | on mouse-up: floats the window, or with `drag: adjust` resizes neighbours and swaps; not tried by hand |
 | Halves, almost maximise, maximise height, half → two thirds → third | working | not in AeroSpace; each checked by `make smoke` on the agent screen (2026-11-21), not yet watched on a real display |
 | Grow and shrink a floating window | working | checked by `make smoke` |
-| Hold a resize key to repeat | built | not tried by hand |
-| Drag to a screen edge to snap, restore on drag-away, haptics | built | needs a real pointer; not tried by hand |
-| Next / previous display, stacked windows | built | not exercised: the smoke test stays off the real displays |
+| Hold a resize key to repeat | built | needs a real keyboard: a typed-by-software key reads as let go at once |
+| Drag to a screen edge to snap, restore on drag-away | working | `rejig drag` on the agent screen with a TextEdit window: right and left halves, top-left quarter, top edge to maximise, and the earlier size back on drag-away, three times running. Needs macOS's own edge tiling off |
+| Haptics on a snap place | built | not felt |
+| Next / previous display, stacked windows | built | not exercised: this Mac has one monitor, and the agent screen is not a destination |
 | Room for Stage Manager's strip | built | Stage Manager is off on this Mac; never exercised |
 | Windows of menu-bar-only apps | built | float, reachable by the focus and snap keys; not yet seen on one |
 | Full-screen apps | by design | a full-screen Space is left alone |
@@ -304,8 +305,11 @@ seen and what has only been built.
 - **Different from AeroSpace by design:** workspaces are real desktops, so
   switching plays the macOS slide, and sending a window to another desktop is UI
   automation that takes the pointer for about half a second. AeroSpace's virtual
-  workspaces do both instantly. Doing it silently on real Spaces needs a
-  scripting addition with SIP partly off, which this project does not use.
+  workspaces do both instantly. The window server's private calls for moving a
+  window to a Space (`SLSMoveWindowsToManagedSpace`, and `SLSSetWindowListWorkspace`
+  with a compat id) were tried on a practice window on macOS 27.2 and moved
+  nothing, so doing it silently needs a scripting addition with SIP partly off,
+  which this project does not use.
 - **Not possible:** moving a Space to another display; assigning workspaces to monitors.
 - **Recommendation:** run Rejig daily with AeroSpace quit but still installed
   and its config untouched. Remove AeroSpace only after a week in which the
@@ -365,5 +369,7 @@ holds state, events and reconciling; `Commands.swift` is everything `rejig
 <command>` can do.
 
 `make notarize` builds, signs with the Developer ID in the keychain, has Apple
-notarize it and leaves `build/Rejig.zip` to hand to another Mac. There is no
-self-update: installing a newer zip over the old app is the update.
+notarize it and leaves `build/Rejig.zip` to hand to another Mac. Rejig asks
+GitHub once at launch and daily whether a newer release exists (`"updates":
+false` stops that) and says so in its menu; "Check for Updates…" opens the
+release page. Nothing installs itself: the new zip replaces the old app by hand.

@@ -231,7 +231,9 @@ final class Manager {
     NSEvent.addGlobalMonitorForEvents(matching: .leftMouseUp) { [unowned self] _ in
       if let place = self.drop, let id = self.draggedID {
         self.footprint.show(nil)
-        self.run("snap \(place) --window-id \(id)")
+        // run() wants the window server's number, not ours; a dragged window nearly always has focus anyway
+        let number = self.windowNumbers().first { $0.value == id }?.key
+        self.run("snap \(place)" + (number.map { " --window-id \($0)" } ?? ""))
       }
       self.drop = nil
       self.draggedID = nil

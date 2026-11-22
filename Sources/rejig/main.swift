@@ -41,6 +41,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     menu.delegate = self
     item.menu = menu
     manager.onChange = { [unowned self] in self.refresh() }
+    // one question to GitHub at launch and each day after; "updates": false in the config asks nothing
+    if manager.config.updates {
+      lookForUpdate()
+      Timer.scheduledTimer(withTimeInterval: 86400, repeats: true) { [unowned self] _ in self.lookForUpdate() }
+    }
     manager.onShortcutMissing = { [unowned self] in self.onboarding.show() }
     manager.onRun = { [unowned self] in self.onboarding.ran($0) }
     manager.onEvent = { [unowned self] event, info in
@@ -102,6 +107,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
           }
         }
         return open(10)
+      case "drag":
+        // for testing: the pointer pressed at one point and taken to another, as a hand would.
+        // drag x,y x,y [--cmd] in points from the main display's top-left; the pointer is put back after
+        let at = words.dropFirst().compactMap { w -> CGPoint? in
+          let n = w.split(separator: ",").compactMap { Double($0) }
+          return n.count == 2 ? CGPoint(x: n[0], y: n[1]) : nil
+        }
+        guard at.count == 2 else { return reply(false, "drag x,y x,y [--cmd]") }
+        let home = CGEvent(source: nil)?.location ?? .zero
+        func mouse(_ type: CGEventType, _ p: CGPoint) {
+          let e = CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: p, mouseButton: .left)
+          e?.flags = words.contains("--cmd") ? .maskCommand : []
+          e?.post(tap: .cghidEventTap)
+        }
+        mouse(.leftMouseDown, at[0])
+        for i in 1...30 {
+          DispatchQueue.main.asyncAfter(deadline: .now() + 0.1 + 0.03 * Double(i)) {
+            let t = CGFloat(i) / 30
+            mouse(.leftMouseDragged, CGPoint(x: at[0].x + (at[1].x - at[0].x) * t, y: at[0].y + (at[1].y - at[0].y) * t))
+          }
+        }
+        return DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
+          mouse(.leftMouseUp, at[1])
+          CGWarpMouseCursorPosition(home)
+          reply(true, "")
+        }
       case "settings": self.settings.show(words.count > 1 ? words[1] : "General")
       default: return manager.run(command, caller: caller, reply: reply)
       }
@@ -136,11 +167,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }.joined(separator: "|")
     let state = manager.paused ? "paused" : manager.mode == "main" ? "" : manager.mode
     // a template symbol, so it follows the menu bar's colour like every other item
-    item.button?.image =
-      c.menuBarIcon || numbers.isEmpty
-      ? NSImage(systemSymbolName: "rectangle.split.2x1", accessibilityDescription: "Rejig") : nil
-    item.button?.imagePosition = .imageLeading
-    item.button?.title = [numbers, state].filter { !$0.isEmpty }.joined(separator: " ")
+    // only when it reads differently: every change redraws the item, and a redraw mid-drag makes it stutter
+    let (icon, title) = (c.menuBarIcon || numbers.isEmpty, [numbers, state].filter { !$0.isEmpty }.joined(separator: " "))
+    if item.button?.title != title { item.button?.title = title }
+    if (item.button?.image != nil) != icon {
+      item.button?.image = icon ? NSImage(systemSymbolName: "rectangle.split.2x1", accessibilityDescription: "Rejig") : nil
+      item.button?.imagePosition = .imageLeading
+    }
   }
 
   func menuNeedsUpdate(_ menu: NSMenu) {
@@ -228,6 +261,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     menu.addItem(.separator())
     add("Settings…", #selector(openSettings), key: "cmd-comma")
     add("Copy Diagnostics", #selector(copyDiagnostics))
+    add(newer.map { "Update Available: \($0)…" } ?? "Check for Updates…", #selector(checkForUpdates))
     menu.addItem(.separator())
     add("Quit", #selector(quit), key: "cmd-q")
   }
@@ -243,6 +277,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   func tour() { onboarding.show(.hello) }
   func practice() { onboarding.addPractice() }
   @objc private func quit() { NSApp.terminate(nil) }
+
+  /// The newest release's tag, when it is past this build; the page it can be had from.
+  // ponytail: tells and shows the download, installs nothing. Replacing a running app safely is
+  // Sparkle's job; take that dependency if dragging a new copy into Applications gets tiresome.
+  private var newer: String?
+  private let releases = URL(string: "https://github.com/adrianmross/rejig/releases/latest")!
+
+  private func lookForUpdate(then: ((Bool) -> Void)? = nil) {
+    let api = URL(string: "https://api.github.com/repos/adrianmross/rejig/releases/latest")!
+    URLSession.shared.dataTask(with: api) { data, _, _ in
+      let tag = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }?["tag_name"] as? String
+      DispatchQueue.main.async {
+        let mine = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
+        let theirs = tag.map { $0.hasPrefix("v") ? String($0.dropFirst()) : $0 }
+        self.newer = theirs.flatMap { $0.compare(mine, options: .numeric) == .orderedDescending ? $0 : nil }
+        then?(tag != nil)
+      }
+    }.resume()
+  }
+
+  @objc private func checkForUpdates() {
+    if newer != nil { return _ = NSWorkspace.shared.open(releases) }
+    lookForUpdate { reached in
+      if self.newer != nil { return _ = NSWorkspace.shared.open(self.releases) }
+      let alert = NSAlert()
+      alert.messageText = reached ? "Rejig is up to date" : "Couldn't reach GitHub to check"
+      NSApp.activate(ignoringOtherApps: true)
+      alert.runModal()
+    }
+  }
 
   @objc private func copyDiagnostics() {
     NSPasteboard.general.clearContents()

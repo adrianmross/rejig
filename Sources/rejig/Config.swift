@@ -39,6 +39,8 @@ struct Config: Decodable {
   var haptics = false
   /// Width kept clear for Stage Manager's strip of recent apps, while Stage Manager is on. 0 keeps none.
   var stageStrip: CGFloat = 0
+  /// Ask GitHub at launch, and daily, whether a newer release exists. Nothing is downloaded or installed.
+  var updates = true
   /// Glide floating windows to where the snap keys send them, instead of jumping.
   var animate = true
   /// Tiled windows: "highlight" draws borders, "shadow" a glow round the focused one, "plain" nothing.
@@ -143,7 +145,7 @@ struct Config: Decodable {
   init() {}
 
   private enum Key: String, CodingKey { case gaps, float, tile, startup, border, modes, fixedSize, showWorkspaces, keys, newWindows, highlight
-    case style, menuBar, menuBarIcon, launcher, presets, drag, animate, unmanagedDisplays, edgeSnap, cycle, restoreOnDrag, cursorFollows, haptics, stageStrip
+    case style, menuBar, menuBarIcon, launcher, presets, drag, animate, unmanagedDisplays, edgeSnap, cycle, restoreOnDrag, cursorFollows, haptics, stageStrip, updates
   }
 
   init(from decoder: Decoder) throws {
@@ -172,6 +174,7 @@ struct Config: Decodable {
     cursorFollows = try c.decodeIfPresent(Bool.self, forKey: .cursorFollows) ?? cursorFollows
     haptics = try c.decodeIfPresent(Bool.self, forKey: .haptics) ?? haptics
     stageStrip = try c.decodeIfPresent(CGFloat.self, forKey: .stageStrip) ?? stageStrip
+    updates = try c.decodeIfPresent(Bool.self, forKey: .updates) ?? updates
     launcher = try c.decodeIfPresent(String.self, forKey: .launcher) ?? launcher
     presets = try c.decodeIfPresent([String: Modes].self, forKey: .presets) ?? presets
     float = try c.decodeIfPresent([String].self, forKey: .float) ?? float

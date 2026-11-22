@@ -78,6 +78,7 @@ private struct SettingsView: View {
           let service = SMAppService.mainApp
           do { try on ? service.register() : service.unregister() } catch { login = service.status == .enabled }
         }
+      Toggle("Check for updates daily", isOn: setting("updates", config.updates))
     }
     Section("Windows") {
       Picker("New windows", selection: setting("newWindows", config.newWindows)) {
