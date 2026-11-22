@@ -483,6 +483,8 @@ final class Manager {
     if w.fullscreen { return false }
     if userFloat.contains(id) { return false }
     if userTile.contains(id) { return true }
+    // a menu-bar-only app's window can be focused, snapped and put in the layout by hand, never tiled unasked
+    if app.activationPolicy != .regular, app.processIdentifier != getpid() { return false }
     if stubborn.contains(id) { return false }
     guard w.resizable else { return false }
     if config.tile.contains(app.bundleIdentifier ?? "") { return true }
@@ -591,8 +593,21 @@ final class Manager {
     var home: [Int: Tree] = [:]
     appMs = [:]
     seen = [:]
+    // a menu-bar-only app is asked only while the window server shows a window of its own: most never have one
+    let windowed = Set(
+      (CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []).compactMap {
+        w -> pid_t? in
+        guard w[kCGWindowLayer as String] as? Int == 0,
+          let b = (w[kCGWindowBounds as String] as? NSDictionary).flatMap({ CGRect(dictionaryRepresentation: $0) }),
+          b.width > 100, b.height > 100
+        else { return nil }
+        return w[kCGWindowOwnerPID as String] as? pid_t
+      })
     let apps = NSWorkspace.shared.runningApplications.filter {
-      ($0.activationPolicy == .regular || $0.processIdentifier == getpid() && (practising || ownWindows)) && !$0.isHidden
+      ($0.processIdentifier == getpid()
+        ? practising || ownWindows
+        : $0.activationPolicy == .regular
+          || $0.activationPolicy == .accessory && windowed.contains($0.processIdentifier)) && !$0.isHidden
         && !$0.isTerminated && !silent.contains($0.processIdentifier)
     }
     // the apps that need asking are asked all at once: the wait is the slowest of them, not their sum
