@@ -32,7 +32,7 @@ struct Win: Hashable {
     let s = AXValueCreate(.cgSize, &size)!
     let p = AXValueCreate(.cgPoint, &origin)!
     // Assistive tools (Shortcat, VoiceOver) switch this on, and apps then animate
-    // every resize themselves, slowly. Off while we write, as Rectangle does.
+    // every resize themselves, slowly. Off while we write.
     let app = AXUIElementCreateApplication(pid)
     var enhanced: CFTypeRef?
     AXUIElementCopyAttributeValue(app, "AXEnhancedUserInterface" as CFString, &enhanced)

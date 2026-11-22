@@ -1,9 +1,9 @@
 import AppKit
 import TileCore
 
-/// Defaults mirror my AeroSpace config, except the direction keys (see `keys`);
+/// The defaults, except the direction keys (see `keys`), are the config I use;
 /// ~/.config/rejig/config.json overrides any key.
-/// Commands use AeroSpace's names so bindings can be copied across.
+/// Commands and keys are plain words: "alt-shift-h", "move left".
 struct Config: Decodable {
   var gaps = Gaps()
   /// Case-insensitive regex substrings of app names that float.
@@ -47,8 +47,8 @@ struct Config: Decodable {
   var style = "highlight"
   /// Pressed after `split`, to pick what fills the new half. Anything unparseable ("none") presses nothing.
   var launcher = "cmd-space"
-  /// Keybinding preset: "macos" (Control-Option-arrows), "vim" (Option-h/j/k/l as
-  /// in AeroSpace), "rex" (Control-Command throughout), or the name of a saved one.
+  /// Keybinding preset: "macos" (Control-Option-arrows), "vim" (Option-h/j/k/l),
+  /// "rex" (Control-Command throughout), or the name of a saved one.
   var keys = "macos"
   /// Presets saved from Settings: name -> a whole `modes` table.
   var presets: [String: Modes] = [:]
@@ -104,7 +104,7 @@ struct Config: Decodable {
       "\(mod)-d": ["split right"],
       "\(mod)-shift-d": ["split down"],
     ]
-    // Rectangle's keys, except where Control-Option-F and -T are already taken here
+    // the snap places on Control-Option letters; F and T are already taken here
     for (key, place) in [
       ("u", "top-left"), ("i", "top-right"), ("j", "bottom-left"), ("k", "bottom-right"), ("d", "left-third"),
       ("s", "center-third"), ("g", "right-third"), ("e", "left-two-thirds"), ("r", "right-two-thirds"),
@@ -112,7 +112,7 @@ struct Config: Decodable {
     ] { main["ctrl-alt-\(key)"] = ["snap \(place)"] }
     main["ctrl-alt-cmd-right"] = ["move-to-display next"]
     main["ctrl-alt-cmd-left"] = ["move-to-display prev"]
-    // halves on Rectangle's own keys, where the preset leaves Control-Option-arrows free
+    // halves on the arrows, where the preset leaves Control-Option-arrows free
     if keys != "macos" {
       main["ctrl-alt-shift-up"] = ["snap maximize-height"]
       for (key, place) in [("left", "left-half"), ("right", "right-half"), ("up", "top-half"), ("down", "bottom-half")] {

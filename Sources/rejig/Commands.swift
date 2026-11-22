@@ -102,7 +102,7 @@ extension Manager {
     }
   }
 
-  /// Runs one AeroSpace-style command, e.g. "focus left" or "resize smart -50".
+  /// Runs one command, e.g. "focus left" or "resize smart -50".
   /// `reply` hears how it went, once it is over: false comes with the reason,
   /// true with any output. Flags: `--window-id <CGWindowID>` acts on that window
   /// instead of the focused one.
@@ -473,7 +473,7 @@ extension Manager {
         activate(to)
       }
     case "snap":
-      // Rectangle's named places. A tiled window leaves the layout to take one.
+      // The named places. A tiled window leaves the layout to take one.
       guard let id, let w = wins[id], let f = w.frame,
         let screen = NSScreen.screens.first(where: { $0.axFrame.contains(CGPoint(x: f.midX, y: f.midY)) })
       else { break }

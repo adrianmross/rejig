@@ -1,7 +1,6 @@
 # Rejig
 
-A small Swift/AppKit tiling window manager that keeps my AeroSpace bindings but
-uses real macOS Spaces. Public APIs throughout, with one read-only private call
+A small Swift/AppKit tiling window manager for macOS that uses real Spaces. Public APIs throughout, with one read-only private call
 for desktop numbers (my choice; it falls back to public means if macOS drops it).
 No scripting addition, SIP stays on.
 
@@ -73,7 +72,7 @@ of the layout, `"tile"` keeps it in at whatever size it does take. `menuBar` is
 floating windows to where the snap keys send them; turn it off if an app stutters. `style` is `"highlight"` (borders),
 `"shadow"` (a glow round the focused window) or `"plain"`. `keys` picks the
 keybinding preset: `"macos"` (default) is Control-Option-arrows to focus and
-Control-Option-Shift-arrows to move, `"vim"` is Option-h/j/k/l as in AeroSpace,
+Control-Option-Shift-arrows to move, `"vim"` is Option-h/j/k/l,
 `"rex"` puts everything on Control-Command (numbers, `[` `]`, `D`), and presets
 saved from Settings live under `presets`. `newWindows` is what happens to a window opened after Rejig started:
 `"float"` (default) leaves it where and at the size macOS restored it until you
@@ -83,13 +82,13 @@ already open at launch, and apps in `tile`, are tiled either way. `highlight`
 turns the borders off. In
 `modes`, an empty list (`"alt-tab": []`) unbinds a default key.
 
-Bindings and commands use AeroSpace's names (`alt-shift-h`, `move left`,
+Bindings and commands are plain words (`alt-shift-h`, `move left`,
 `resize smart -50`, ...). Reload from Settings > General, or `Option-Shift-;` then `Esc`.
 
 ## Controls
 
-The same keys as my AeroSpace config (with `"keys": "vim"`; the default swaps
-h/j/k/l for Control-Option-arrows), with workspaces 1 to 6. Service mode
+Option-h/j/k/l with `"keys": "vim"`, Control-Option-arrows by default, and
+workspaces 1 to 6. Service mode
 (`Option-Shift-;`) shows `▦ service` in the menu bar; every service key returns
 to main mode.
 
@@ -108,20 +107,20 @@ next, or whichever open window you pick from the Dock or Cmd-Tab within 30
 seconds, takes the new half. `Option-[` and `Option-]` step through workspaces.
 
 Floating windows: the focus keys reach them like any other window. The move keys
-step a floating window around its display the way Rectangle does: each press moves
+step a floating window around its display: each press moves
 it one step along that axis through near half, full span, far half. So left then
 up is the top-left quarter, right from there is the top half, right again the
 top-right quarter, and one more carries on to the next display. `fullscreen` on a
 floating window fills the display; again puts it back.
 
-Rectangle's named places work on any window, on Rectangle's keys: Control-Option
+Named places work on any window: Control-Option
 with `U` `I` `J` `K` for the quarters, `D` `S` `G` for thirds, `E` `R` for two
 thirds, `C` to centre, Return to maximise and Delete to restore the size from
 before the first snap. (`F` and `T` are already taken here, hence `S` and `R`.)
 A tiled window leaves the layout to take a place.
 
 The ▦ menu's "Snap This Window" lists every place with its picture and keys, and
-"Move in Layout" and "Join With" do the same for a tile. More from Rectangle:
+"Move in Layout" and "Join With" do the same for a tile. Also:
 left or right half pressed again goes to two thirds, then a third (`cycle`);
 `snap almost-maximize` and `snap maximize-height`; `move-to-display next|prev`
 (Control-Option-Command-arrows); `stack next|prev` steps through windows piled on
@@ -146,7 +145,7 @@ add that to a window's own right-click menu. A window that will not take the siz
 of its tile (System Settings has a fixed width) floats automatically, unless
 `fixedSize` is `"tile"`; `Option-Control-F` forces one back into the layout.
 
-Any command can also be sent from a terminal, like the `aerospace` CLI:
+Any command can also be sent from a terminal:
 
 ```sh
 rejig focus left
@@ -248,7 +247,7 @@ Nothing polls. A reconcile runs only after an event, coalesced over 50 ms, asks
 only the app that raised it (every app after a Space, display or configuration
 change), and writes a window's frame only when it differs from the layout.
 
-## Compared with the AeroSpace config
+## Status
 
 Status as of 2026-11-17 on macOS 27.2.1. "Working" was exercised live on this
 Mac through the CLI. "Built" means implemented, and unit-tested where it is pure
@@ -260,31 +259,31 @@ logic, but not yet exercised live.
 | Accordion, 30 pt padding | built | |
 | Gaps 5 / top 7 | built | unit-tested |
 | Flatten and opposite-orientation normalization | built | unit-tested |
-| Focus h/j/k/l | working, partial | geometric nearest window, not AeroSpace's tree walk; includes floating windows |
+| Focus h/j/k/l | working, partial | geometric nearest window, not a walk of the layout tree; includes floating windows |
 | Move h/j/k/l, across monitors at the edge | built | unit-tested |
 | Smart resize | built | unit-tested |
-| Fullscreen | built | fills the workspace like AeroSpace, not a native full-screen Space |
+| Fullscreen | built | fills the workspace, not a native full-screen Space |
 | Float toggle, float rules, Ghostty tile rule | built | |
-| Move a floating window | working | not in AeroSpace: steps through halves, quarters and displays (unit-tested; left, up, right seen live) |
+| Move a floating window | working | steps through halves, quarters and displays (unit-tested; left, up, right seen live) |
 | Workspace 1 to 6 | working, partial | needs the desktop shortcuts on (one button); plays the Space slide animation; this Mac has 5 desktops, so 6 does nothing yet |
 | Move window to workspace | working, partial | UI automation: grabs a bare part of the title bar and moves the pointer briefly. Carried a Rex window there and back; a QuickTime video window (no title bar) stayed behind |
 | Back and forth | working | |
-| Split right / down | working | not in AeroSpace; split-down with the real hotkey put a newly launched app under the focused tile |
-| Quarters, thirds, two thirds, centre, maximise, restore | built | not in AeroSpace; `snap <place>`; top-left, right third and restore seen with the real hotkeys |
-| Workspaces in the menu bar | working | not in AeroSpace; exact numbers from the window server, seen across a switch and back |
+| Split right / down | working | split-down with the real hotkey put a newly launched app under the focused tile |
+| Quarters, thirds, two thirds, centre, maximise, restore | built | `snap <place>`; top-left, right third and restore seen with the real hotkeys |
+| Workspaces in the menu bar | working | exact numbers from the window server, seen across a switch and back |
 | Move workspace to next monitor | partial | sends the workspace's tiled windows to the next monitor; the Space itself cannot move. Automating the Mission Control drag was tried and macOS refused the drop |
 | Workspace to monitor assignment | unsupported | arrange desktops per display in Mission Control once; macOS remembers per display |
 | Persistent workspaces | working | native Spaces persist by themselves |
 | Service mode | working | entered and left with the real hotkeys (`rejig press <keys>` types them from the app) |
 | Mouse follows focus to another monitor | built | |
 | Borders | working | exact colours and width measured on screen; tiled windows only, floating windows have none |
-| Per-workspace tiling on/off | working | not in AeroSpace; exercised through the CLI |
+| Per-workspace tiling on/off | working | exercised through the CLI |
 | Fixed-size windows | working | floated automatically, or tiled at their own size with `fixedSize: tile` (both seen with System Settings and QuickTime Player) |
 | Start at login | built | `SMAppService`, toggled from the menu |
 | Hotkey registration | working | all combinations register on macOS 27.2.1 |
 | Windows on other Spaces | by design | Accessibility only lists visible Spaces; hidden workspaces keep their layout untouched |
 | Manual move and resize with the mouse | built | on mouse-up: floats the window, or with `drag: adjust` resizes neighbours and swaps; not tried by hand |
-| Halves, almost maximise, maximise height, half → two thirds → third | working | not in AeroSpace; each checked by `make smoke` on the agent screen (2026-11-21), not yet watched on a real display |
+| Halves, almost maximise, maximise height, half → two thirds → third | working | each checked by `make smoke` on the agent screen (2026-11-21), not yet watched on a real display |
 | Grow and shrink a floating window | working | checked by `make smoke` |
 | Hold a resize key to repeat | built | needs a real keyboard: a typed-by-software key reads as let go at once |
 | Drag to a screen edge to snap, restore on drag-away | working | `rejig drag` on the agent screen with a TextEdit window: right and left halves, top-left quarter, top edge to maximise, and the earlier size back on drag-away, three times running. Needs macOS's own edge tiling off |
@@ -302,20 +301,19 @@ seen and what has only been built.
 - **Demonstrated:** tiling, focus, move, layouts, service mode, borders, float
   rules, workspaces by number on real Spaces, and the snap places, by hand or by
   `make smoke`. Unit tests cover the layout engine, the config file and key names.
-- **Different from AeroSpace by design:** workspaces are real desktops, so
-  switching plays the macOS slide, and sending a window to another desktop is UI
-  automation that takes the pointer for about half a second. AeroSpace's virtual
-  workspaces do both instantly. The window server's private calls for moving a
+- **The cost of real Spaces:** switching plays the macOS slide, and sending a
+  window to another desktop is UI automation that takes the pointer for about
+  half a second. Virtual workspaces do both instantly. The window server's private calls for moving a
   window to a Space (`SLSMoveWindowsToManagedSpace`, and `SLSSetWindowListWorkspace`
   with a compat id) were tried on a practice window on macOS 27.2 and moved
   nothing, so doing it silently needs a scripting addition with SIP partly off,
   which this project does not use.
 - **Not possible:** moving a Space to another display; assigning workspaces to monitors.
-- **Recommendation:** run Rejig daily with AeroSpace quit but still installed
-  and its config untouched. Remove AeroSpace only after a week in which the
-  rollback below was never needed and the "built" rows have been tried by hand.
-  If window-to-desktop moves are a large part of the day, the slide is the cost
-  to weigh; everything else is at or past the AeroSpace config.
+- **Recommendation:** run Rejig daily with the window manager it replaces quit
+  but still installed and its config untouched. Remove that one only after a
+  week in which the rollback below was never needed and the "built" rows have
+  been tried by hand. If window-to-desktop moves are a large part of the day,
+  the slide is the cost to weigh.
 
 ## Diagnostics
 
@@ -335,7 +333,7 @@ could not be registered, reconcile timings, and every tiled window per display.
 ## Troubleshooting
 
 - **Nothing tiles.** Accessibility is off, or Rejig is paused (it starts
-  paused if AeroSpace is running). Check the menu.
+  paused when it finds another tiling manager running). Check the menu.
 - **Beep on Option-number.** That desktop's shortcut is off; the setup panel opens.
 - **Option-number does nothing.** That desktop doesn't exist; add it in Mission Control.
 - **Permission asked again after a rebuild.** The build was ad-hoc signed. Pass
@@ -352,8 +350,17 @@ To remove it completely:
 make uninstall
 ```
 
-AeroSpace's config is untouched. Start AeroSpace again after quitting Rejig;
-if both are running, Rejig starts paused.
+Rejig changes no other window manager's config. Quit Rejig before starting
+another; if it finds one running at launch, it starts paused.
+
+## Inspiration
+
+Rejig began as a way to keep my [AeroSpace](https://github.com/nikitabobko/AeroSpace)
+config on real macOS Spaces instead of virtual workspaces: the command names,
+the spelling of keys, modes, and the tiles and accordion layouts come from it,
+and Rejig starts paused if AeroSpace is running. The named snap places and
+their Control-Option keys, the pictures in the menu, size cycling and edge
+snapping follow [Rectangle](https://github.com/rxhanson/Rectangle).
 
 ## Development
 

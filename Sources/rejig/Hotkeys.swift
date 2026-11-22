@@ -60,7 +60,7 @@ final class Hotkeys {
     return refused
   }
 
-  /// "alt-shift-h" -> (virtual key code, Carbon modifier mask), AeroSpace's key names.
+  /// "alt-shift-h" -> (virtual key code, Carbon modifier mask).
   static func parse(_ binding: String) -> (UInt32, UInt32)? {
     var parts = binding.split(separator: "-").map(String.init)
     guard let key = parts.popLast().flatMap({ keys[$0] }) else { return nil }
@@ -87,7 +87,7 @@ final class Hotkeys {
     }
   }
 
-  // ANSI virtual key codes: positions on a QWERTY board, like AeroSpace's qwerty preset
+  // ANSI virtual key codes: positions on a QWERTY board
   static let keys: [String: Int] = [
     "a": 0, "s": 1, "d": 2, "f": 3, "h": 4, "g": 5, "z": 6, "x": 7, "c": 8, "v": 9, "b": 11, "q": 12, "w": 13,
     "e": 14, "r": 15, "y": 16, "t": 17, "1": 18, "2": 19, "3": 20, "4": 21, "6": 22, "5": 23, "equal": 24,

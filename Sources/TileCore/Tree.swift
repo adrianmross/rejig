@@ -60,7 +60,7 @@ public final class Tree {
   public func contains(_ id: Int) -> Bool { leaf(id) != nil }
   func leaf(_ id: Int) -> Node? { root.leaves.first { $0.window == id } }
 
-  /// New windows land after the focused one, like AeroSpace.
+  /// New windows land after the focused one.
   public func insert(_ id: Int) {
     guard leaf(id) == nil else { return }
     let node = Node(window: id)
@@ -169,7 +169,7 @@ public final class Tree {
     (x.weight, y.weight) = (y.weight, x.weight)
   }
 
-  /// AeroSpace's "resize smart": along the parent's orientation, taking from the siblings.
+  /// "resize smart": along the parent's orientation, taking from the siblings.
   /// With an `axis`, along that axis instead, at the nearest container that splits that way.
   public func resize(_ id: Int, by delta: CGFloat, inner: CGFloat, axis: Orientation? = nil) {
     guard var n = leaf(id) else { return }
@@ -236,7 +236,7 @@ public final class Tree {
     return nil
   }
 
-  /// AeroSpace's two normalizations: flatten single-child containers, and give
+  /// Two normalizations: flatten single-child containers, and give
   /// nested containers the opposite orientation to their parent.
   private func normalize() {
     flatten(root)
@@ -303,7 +303,7 @@ public final class Tree {
 }
 
 /// The rect whose centre is nearest in `dir`, penalising sideways offset.
-// ponytail: geometric, not tree-based like AeroSpace; ties between equally
+// ponytail: geometric, not a walk of the tree; ties between equally
 // near windows are arbitrary. Track per-container MRU if that ever matters.
 public func nearest(from: CGRect, _ dir: Direction, in rects: [Int: CGRect]) -> Int? {
   rects.compactMap { id, r -> (Int, CGFloat)? in
@@ -313,7 +313,7 @@ public func nearest(from: CGRect, _ dir: Direction, in rects: [Int: CGRect]) -> 
   }.min { $0.1 < $1.1 }?.0
 }
 
-/// Rectangle-style stepping for a floating window. Each press moves it one step
+/// Stepping for a floating window. Each press moves it one step
 /// along that axis through near half, full span, far half, so the four direction
 /// keys reach every half, every quarter and the whole area. Stepping off the edge
 /// enters `next` (the display on that side) on its near half.
@@ -343,7 +343,7 @@ public func snap(_ frame: CGRect, in area: CGRect, _ dir: Direction, inner: CGFl
   return CGRect(x: x, y: y, width: w, height: height)
 }
 
-/// Rectangle's named places for a floating window: halves, quarters, thirds, two thirds,
+/// Named places for a floating window: halves, quarters, thirds, two thirds,
 /// the whole area, or centred at its own size. Nil for a name it doesn't know.
 public func place(_ name: String, in area: CGRect, inner: CGFloat, size: CGSize) -> CGRect? {
   // `count` of `parts` equal slices starting at slice `start`, with `inner` between slices

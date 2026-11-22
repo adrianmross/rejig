@@ -27,7 +27,7 @@ final class ConfigTests: XCTestCase {
     XCTAssertEqual(c.modes["main"]?["alt-enter"], ["fullscreen"])
     XCTAssertEqual(c.modes["main"]?["alt-tab"], [])
     XCTAssertEqual(c.modes["main"]?["alt-h"], ["focus left"])
-    // the arrows are free in this preset, so they take Rectangle's halves
+    // the arrows are free in this preset, so they take the halves
     XCTAssertEqual(c.modes["main"]?["ctrl-alt-left"], ["snap left-half"])
   }
 
